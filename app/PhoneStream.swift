@@ -203,7 +203,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // ---- общие действия ----
         menu.addItem(item("Mount all available", #selector(mountAll), "m"))
-        menu.addItem(item("Reconnect", #selector(reconnect), "r"))
+        menu.addItem(item("🔌 Подключить всё", #selector(reconnect), "r"))
         menu.addItem(item("Screen mirror", #selector(mirror), ""))
         menu.addItem(item("Clear phone cache", #selector(clearCache), ""))
         menu.addItem(.separator())
@@ -301,9 +301,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     @objc func reconnect() {
-        // Rediscover: пересканировать mDNS, переподхватить Wi-Fi, поднять упавшее (рабочее не трогаем).
-        run(rediscoverScript) { code, out in
-            if code != 0 { self.alert("Rediscover failed", out) }
+        // «Подключить всё»: прогон по всем способам инициализации каждого канала + отчёт.
+        run(rediscoverScript) { _, out in
+            self.alert("Подключение всех каналов",
+                out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Готово." : out)
         }
     }
 
