@@ -68,9 +68,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // статусы трёх каналов для прозрачного отображения
     func usbAdbOn() -> Bool { usbAvailable() }      // adb по USB (кабель)
     func wifiSshOn() -> Bool { wifiAvailable() }    // прямой SSH по Wi-Fi
-    func wirelessDebugOn() -> Bool {                 // adb по Wi-Fi (Wireless Debugging, mDNS)
+    func wirelessDebugOn() -> Bool {                 // Wireless Debugging ВЕЩАЕТ в mDNS (доступен)
         !sh("\(adb) mdns services 2>/dev/null | grep -i _adb-tls-connect")
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    func wdConnected() -> Bool {                      // adb реально подключён по Wi-Fi (ip:port или _adb-tls)
+        !sh("\(adb) devices | awk '/\\tdevice$/{print $1}' | grep -E ':[0-9]+$|_adb-tls'")
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    // Админский канал НИКОГДА не выключаем. Если телефон его вещает, а мы не подключены — подключаемся.
+    func autoConnectWD() {
+        if wirelessDebugOn() && !wdConnected() {
+            _ = sh("EP=$(\(adb) mdns services 2>/dev/null | awk '/_adb-tls-connect._tcp/{print $NF; exit}'); [ -n \"$EP\" ] && \(adb) connect \"$EP\" >/dev/null 2>&1")
+        }
     }
     func phoneModel() -> String {
         let dev = sh("\(adb) devices | awk '/\\tdevice$/{print $1}' | head -1")
@@ -126,11 +136,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         // ---- ЦЕНТР ПОДКЛЮЧЕНИЯ: прозрачный статус трёх каналов ----
-        let chHdr = NSMenuItem(title: "Каналы связи", action: nil, keyEquivalent: ""); chHdr.isEnabled = false
+        autoConnectWD()  // админский канал не выключаем; вещает → подключаемся сами
+        let chHdr = NSMenuItem(title: "Каналы связи (наведи для подсказки)", action: nil, keyEquivalent: ""); chHdr.isEnabled = false
         menu.addItem(chHdr)
-        let lUSB = NSMenuItem(title: "  \(usbAdbOn() ? "🟢" : "⚪️") USB (кабель) — перенос/команды", action: nil, keyEquivalent: ""); lUSB.isEnabled = false; menu.addItem(lUSB)
-        let lSSH = NSMenuItem(title: "  \(wifiSshOn() ? "🟢" : "⚪️") Wi-Fi (SSH) — браузинг/стрим/перенос", action: nil, keyEquivalent: ""); lSSH.isEnabled = false; menu.addItem(lSSH)
-        let lWD  = NSMenuItem(title: "  \(wirelessDebugOn() ? "🟢" : "⚪️") Wireless-debug — не нужен", action: nil, keyEquivalent: ""); lWD.isEnabled = false; menu.addItem(lWD)
+        let lUSB = NSMenuItem(title: "  \(usbAdbOn() ? "🟢" : "⚪️") USB (кабель) — файлы + команды", action: nil, keyEquivalent: ""); lUSB.isEnabled = false
+        lUSB.toolTip = "Кабель (adb). Самый быстрый и стабильный. Файлы: push/pull. Команды: pm, scrcpy, logcat. «Mount USB» — папка телефона в Finder."
+        menu.addItem(lUSB)
+        let lSSH = NSMenuItem(title: "  \(wifiSshOn() ? "🟢" : "⚪️") Wi-Fi (SSH) — файлы без кабеля", action: nil, keyEquivalent: ""); lSSH.isEnabled = false
+        lSSH.toolTip = "Прямой SSH по Wi-Fi (порт 8022). ГЛАВНЫЙ канал для ФАЙЛОВ без кабеля: браузинг, стрим в IINA, перенос ~25 МБ/с. «Mount Wi-Fi» монтирует именно по SSH. Wireless Debugging не нужен."
+        menu.addItem(lSSH)
+        let wdConn = wdConnected(), wdAvail = wirelessDebugOn()
+        let wdDot = wdConn ? "🟢" : (wdAvail ? "🟡" : "⚪️")
+        let wdTxt = wdConn ? "Wireless-debug — админ-канал (adb), подключён"
+                  : (wdAvail ? "Wireless-debug — доступен, подключаюсь…" : "Wireless-debug — выкл (включи на телефоне)")
+        let lWD  = NSMenuItem(title: "  \(wdDot) \(wdTxt)", action: nil, keyEquivalent: ""); lWD.isEnabled = false
+        lWD.toolTip = "АДМИНСКИЙ/сигнальный канал (adb по Wi-Fi): команды управления телефоном — pm, settings, scrcpy, logcat. НЕ для файлов (файлы по SSH). Тумблер включается на телефоне; удалённо включить нельзя, но если включён — подключаюсь сам и держу, не выключаю."
+        menu.addItem(lWD)
         menu.addItem(item("  ⓘ Какой канал для чего", #selector(helpChannels), ""))
         menu.addItem(item("  Проверить SSH", #selector(checkSSH), ""))
         menu.addItem(item("  Перезапустить SSH на телефоне", #selector(restartSSH), ""))
@@ -158,12 +179,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         // ---- секция Wi-Fi volume ----
-        let wifiHdr = NSMenuItem(title: transportLabel(true, "Wi-Fi"), action: nil, keyEquivalent: "")
+        let wifiHdr = NSMenuItem(title: transportLabel(true, "Wi-Fi · SSH"), action: nil, keyEquivalent: "")
         wifiHdr.isEnabled = false
+        wifiHdr.toolTip = "Эта папка смонтирована по Wi-Fi через SSH (НЕ через Wireless-debug)."
         menu.addItem(wifiHdr)
         // постоянный варнинг (виден всегда, не только когда не смонтировано)
         let wifiWarn = NSMenuItem(title: "  ⚠︎ Finder по Wi-Fi медленный — для просмотра бери браузер/IINA/SSH", action: nil, keyEquivalent: "")
         wifiWarn.isEnabled = false
+        wifiWarn.toolTip = "Маунт по Wi-Fi идёт через SSH — стабильнее, чем по Wireless-debug, но это всё равно FUSE-по-сети: при обрыве Wi-Fi Finder может подвиснуть (есть watchdog, аварийно отмонтирует). Для просмотра/стрима — браузер+IINA, не Finder."
         menu.addItem(wifiWarn)
         if wifiM {
             menu.addItem(item("  Open Wi-Fi folder", #selector(openWiFi), ""))
