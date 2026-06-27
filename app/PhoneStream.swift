@@ -26,6 +26,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             statusItem.button?.image = img
         } else { statusItem.button?.title = "📱" }
         let menu = NSMenu(); menu.delegate = self; statusItem.menu = menu
+        startKeepalive()   // пока трей запущен — keepalive держит USB-связь горячей
+    }
+    func applicationWillTerminate(_ note: Notification) { stopKeepalive() }
+
+    // ---- keepalive: пинг телефона, чтобы Mac не усыплял USB-порт ----
+    func startKeepalive() {
+        let script = (Bundle.main.resourcePath ?? "") + "/phone-keepalive.sh"
+        guard FileManager.default.fileExists(atPath: script) else { return }
+        let p = Process(); p.launchPath = "/bin/bash"
+        p.arguments = ["-c", "pkill -f phone-keepalive.sh 2>/dev/null; rmdir /tmp/phone-keepalive.lock 2>/dev/null; exec bash \"\(script)\""]
+        try? p.run()
+    }
+    func stopKeepalive() {
+        let p = Process(); p.launchPath = "/bin/bash"
+        p.arguments = ["-c", "pkill -f phone-keepalive.sh 2>/dev/null"]
+        try? p.run(); p.waitUntilExit()
     }
 
     // ---- хелперы состояния ----
@@ -264,7 +280,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc func quit() { NSApp.terminate(nil) }
+    @objc func quit() { stopKeepalive(); NSApp.terminate(nil) }
     func alert(_ t: String, _ m: String) {
         let a = NSAlert(); a.messageText = t
         a.informativeText = m.isEmpty ? "Check the phone and that sshd is running in Termux." : m
