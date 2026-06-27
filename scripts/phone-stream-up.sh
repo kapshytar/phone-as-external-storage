@@ -1,0 +1,46 @@
+#!/bin/bash
+# No-copy стрим-маунт телефона в ~/PhoneStream (rclone + sftp + Termux sshd).
+# Транспорт: USB (adb forward) приоритет, иначе Wi-Fi через mDNS. Идемпотентно + самовосстановление.
+set -u
+ADB="$HOME/Library/Android/sdk/platform-tools/adb"
+RCLONE=/usr/local/bin/rclone
+MNT="$HOME/PhoneStream"
+PORT=8022
+
+# уже смонтировано и живо?
+if mount | grep -q " $MNT " && ls "$MNT" >/dev/null 2>&1; then
+  exit 0
+fi
+
+# 1) выбрать adb-устройство: сперва USB, иначе Wi-Fi (mDNS)
+DEV=$("$ADB" devices | awk '/\tdevice$/{print $1}' | grep -v '_adb-tls' | grep -v ':' | head -1)
+if [ -z "$DEV" ]; then
+  EP=$("$ADB" mdns services 2>/dev/null | awk '/_adb-tls-connect._tcp/{print $NF; exit}')
+  [ -n "$EP" ] && "$ADB" connect "$EP" >/dev/null 2>&1
+  DEV=$("$ADB" devices | awk '/\tdevice$/{print $1}' | grep -E '_adb-tls|:' | head -1)
+fi
+[ -z "$DEV" ] && { echo "Нет adb-устройства (ни USB, ни Wi-Fi). Включи телефон/Wireless debugging."; exit 1; }
+echo "adb-устройство: $DEV"
+
+# 2) проброс порта sshd
+"$ADB" -s "$DEV" forward tcp:$PORT tcp:$PORT >/dev/null 2>&1
+
+# 3) sshd на телефоне отвечает?
+if ! nc -z -G 3 127.0.0.1 $PORT 2>/dev/null; then
+  echo "sshd на телефоне не отвечает. Запусти в Termux: sshd"
+  exit 1
+fi
+
+# 4) (пере)монтировать
+if mount | grep -q " $MNT "; then diskutil unmount force "$MNT" >/dev/null 2>&1; fi
+rm -rf "$MNT"; mkdir -p "$MNT"
+"$RCLONE" mount phone:storage/shared "$MNT" \
+  --vfs-cache-mode minimal --vfs-read-chunk-streams 16 --vfs-read-chunk-size 8M \
+  --dir-cache-time 12h --volname Phone-Stream --no-modtime \
+  --log-file /tmp/rclone_mount.log --log-level INFO --daemon
+for i in $(seq 1 10); do
+  sleep 1
+  if mount | grep -q " $MNT "; then echo "Смонтировано (no-copy, многопоток): $MNT"; exit 0; fi
+done
+echo "Не удалось смонтировать. Лог:"; tail -4 /tmp/rclone_mount.log
+exit 1
