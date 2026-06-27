@@ -30,9 +30,28 @@ Android dropped USB Mass Storage years ago. Existing options each have tradeoffs
 - **MTP** — slow (5–15 MB/s), connection drops, unreliable on macOS
 - **MacDroid / Commander One** — paid, closed-source
 - **OpenMTP** — copy workflow only, no streaming
+- **Phone-side FTP/WebDAV apps** (X-plore, Material Files, MiXplorer, ES) — see below: the built-in server keeps dying
 - **Raw adbfs / sshfs** — CLI only, fragile across Android updates
 
 **What nothing else does:** seamless automatic USB↔Wi-Fi failover combined with no-copy media streaming to IINA. This project wires those pieces together with a menubar app so you never touch the terminal for day-to-day use.
+
+### Why phone-side FTP/WebDAV apps are unreliable (and this isn't)
+
+People try the FTP/WebDAV server built into file-manager apps (X-plore, Material Files, MiXplorer, ES) and find it works for five minutes, then drops. The problem isn't FTP — it's that **Android aggressively kills the app's background server**:
+
+- Background the app or turn off the screen → Doze, battery optimization and the phantom-process killer **terminate the foreground service** → the server dies.
+- Wi-Fi power-save puts the radio to sleep → connections stall and drop.
+- Plain FTP itself is fragile (no encryption, no resume, passive-mode/NAT issues), and Finder handles FTP/WebDAV poorly.
+- No wake-lock → the phone sleeps and takes the server with it.
+
+**This project hardens exactly that weak link:**
+
+- **Termux + `termux-wake-lock` + battery set to Unrestricted + Termux:Boot** — sshd stays alive in the background and survives a reboot.
+- A **self-healing watchdog** on the phone restarts sshd if it ever dies.
+- **SSH instead of FTP** — encrypted, key-auth, multi-stream, resumable.
+- On the Mac: keepalive + watchdog + automatic channel failover.
+
+That's the actual reason to use this over a tap-to-start FTP app: the server doesn't quietly die on you.
 
 ---
 
