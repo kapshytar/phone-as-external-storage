@@ -96,6 +96,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(st)
         menu.addItem(.separator())
 
+        // ---- основная кнопка: открыть быстрый браузер телефона (adb-листинг, не Finder) ----
+        menu.addItem(item("Open Phone Browser", #selector(openBrowser), "b"))
+        menu.addItem(.separator())
+
         // ---- секция USB volume ----
         let usbHdr = NSMenuItem(title: transportLabel(false, "USB"), action: nil, keyEquivalent: "")
         usbHdr.isEnabled = false
@@ -168,6 +172,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func openUSB() {
         NSWorkspace.shared.open(URL(fileURLWithPath: mntUSB))
+    }
+    @objc func openBrowser() {
+        // быстрый браузер телефона (adb-листинг, не Finder); в нём открытие файла = стрим
+        let candidates = ["/Applications/FileDroid.app"]
+        for c in candidates where FileManager.default.fileExists(atPath: c) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: c)); return
+        }
+        alert("Браузер не найден", "Поставь FileDroid в /Applications (или ADBFileExplorer).")
     }
 
     // ---- Wi-Fi actions ----
