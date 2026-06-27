@@ -1,0 +1,19 @@
+# secrets / private — НИКОГДА не коммитить
+*.pem
+*.key
+id_ed25519*
+*known_hosts*
+.env
+HANDOFF.md
+.phone_wifi_ip
+.phone_wifi_user
+
+# logs / temp
+*.log
+/tmp/
+.DS_Store
+
+# build artifacts
+*.o
+PhoneStream
+*.app/

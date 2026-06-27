@@ -1,39 +1,42 @@
-# Roadmap / TODO
+# Roadmap
 
-Статус: базовое решение РАБОТАЕТ (adbfs-маунт + no-copy rclone-стрим + трей-приложение + out-of-box setup).
-Ниже — что доделать. Приоритеты по убыванию.
+## P1 — Reliability
 
-## P1 — надёжность сервера
-- [ ] **Watchdog/reconciler на Mac**: следить за `adb track-devices`, при смене транспорта (USB↔Wi-Fi) или зависшем маунте — force-unmount + remount, не теряя pending-writes. (Сейчас чинится вручную кнопкой Подключить.)
-- [ ] **Трей-приложение v2 = state machine**: показывать путь (USB/Wi-Fi/hotspot/VPN), статус ssh/adb-forward/rclone, «есть несохранённые записи», последнюю ошибку. Unmount должен ждать flush, не делать force по умолчанию.
-- [ ] **Hotspot-режим**: проверить mDNS-автопоиск поверх точки доступа; добавить fallback по фиксированному IP телефона.
-- [ ] **После ребута телефона**: проверить, что Termux:Boot реально поднимает sshd; учесть первый разблок (credential-encrypted storage) и что Wireless Debugging может быть выключен → USB как recovery.
+- [ ] **Watchdog / auto-reconnect:** monitor `adb track-devices`; on transport change (USB↔Wi-Fi) or wedged mount — force-unmount and remount without losing pending writes. Currently requires manual reconnect via the tray.
+- [ ] **Tray app state machine:** display active transport (USB / Wi-Fi / hotspot / VPN), SSH and adb-forward status, pending write indicator, last error. Unmount should wait for cache flush rather than force by default.
+- [ ] **Hotspot mode:** verify mDNS discovery over personal hotspot; add fallback to cached phone IP.
+- [ ] **Post-reboot recovery:** verify Termux:Boot reliably starts sshd; handle credential-encrypted storage lock on first boot; handle Wireless Debugging reset → USB as recovery path.
 
-## P2 — безопасность и долговечность
-- [ ] Security-профиль: sshd bind `127.0.0.1` (если только adb-forward) ИЛИ отдельный mount-only ключ + `PasswordAuthentication no` + `authorized_keys from=<subnet>` для прямого VPN-доступа.
-- [ ] Battery longevity: авто-включать Samsung «защита батареи» 80–85%; мониторинг температуры; напоминание про нормальный кабель/вентиляцию.
-- [ ] Внешний доступ через VPN на роутере — документировать и протестировать (статический DHCP телефону).
+## P2 — Security and longevity
 
-## P3 — производительность
-- [ ] Подобрать `--vfs-read-chunk-streams` (сейчас 8) замерами под USB и Wi-Fi.
-- [ ] Многопоточная качалка для bulk-копий (`rclone copy --transfers N --multi-thread-streams`) — отдельный «турбо-перенос» для больших объёмов.
-- [ ] Concurrent-edit: короткий `--dir-cache-time` или кнопка Refresh/remount (у SFTP нет push-notify).
+- [ ] Harden sshd: bind to `127.0.0.1` when only `adb forward` is used; separate mount-only key + `PasswordAuthentication no` + `from=<subnet>` in `authorized_keys` for direct VPN access.
+- [ ] Battery monitoring: alert when phone temperature is high; reminder about cable quality and ventilation.
+- [ ] Document and test external access over router VPN (static DHCP for the phone).
 
-## P4 — кроссплатформенность и апстрим
-- [ ] Apple Silicon: arm64-бинарь rclone + ветка под FUSE-T (без снижения безопасности для KEXT).
-- [ ] Windows-вариант (у юзера есть Windows): adb forward + rclone mount через WinFsp.
-- [ ] `setup.sh`: прогон на чистой машине; ветка под Apple Silicon.
-- [ ] PR в апстрим: FileDroid (кнопка Mount), ADBFileExplorer (фото-превью + меню Mount) — собрано локально, не отправлено.
+## P3 — Performance
 
-## P4.5 — Сверх переноса файлов (scrcpy и adb-удобства)
-Идея: раз adb-канал к телефону уже поднят (USB/Wi-Fi), добавить «базовые штуки» прямо из трея, чтобы не помнить команды.
-- [ ] **scrcpy — зеркало экрана + управление**: кнопка в трее «Зеркало экрана». Работает по тому же adb (USB-турбо или Wi-Fi). Установка `brew install scrcpy`. Запуск просто `scrcpy` (или `scrcpy -s <serial>` под выбранный транспорт).
-- [ ] Зеркало по Wi-Fi через тот же mDNS/adb-коннект (без проводов).
-- [ ] Скриншот телефона (`adb exec-out screencap -p`) → сохранить/в буфер, из трея.
-- [ ] Запись экрана (`scrcpy --record` или `adb shell screenrecord`), из трея.
-- [ ] Быстрые действия: установить APK (`adb install`), открыть приложение, буфер обмена телефон↔Mac.
-- [ ] Профиль «турбо для зеркала»: для низкой задержки mirroring предпочитать USB.
+- [ ] Benchmark `--vfs-read-chunk-streams` under USB and Wi-Fi separately to confirm the 4–8 sweet spot.
+- [ ] Multithreaded bulk copy mode (`rclone copy --transfers N --multi-thread-streams`) as a separate "turbo transfer" action for large batches.
+- [ ] Concurrent-edit refresh: short `--dir-cache-time` or an explicit Refresh button (SFTP has no push notification).
 
-## P5 — фичи
-- [ ] Фото-превью: fallback для картинок без EXIF-миниатюры (полная тяга + Pillow resize); видео-превью.
-- [ ] Подписать/нотаризовать PhoneStream.app (сейчас ad-hoc подпись — при первом запуске может ругаться Gatekeeper).
+## P4 — Portability and upstream
+
+- [ ] Apple Silicon: arm64 rclone binary + FUSE-T default path (no Reduced Security required).
+- [ ] Windows variant: `adb forward` + rclone mount via WinFsp.
+- [ ] `setup.sh`: clean-machine test on Apple Silicon.
+- [ ] Upstream PRs: ADBFileExplorer (photo preview + Mount menu item), FileDroid (Mount button) — changes are built locally, not yet submitted.
+
+## P4.5 — Tray convenience actions
+
+The adb channel is already open; these require no new infrastructure:
+
+- [ ] **Screen mirror:** tray button launches `scrcpy` (USB preferred for low latency; Wi-Fi via same adb connect).
+- [ ] **Screenshot:** `adb exec-out screencap -p` → save to file or clipboard, from the tray.
+- [ ] **Screen record:** `scrcpy --record` or `adb shell screenrecord`, from the tray.
+- [ ] Quick actions: install APK (`adb install`), clipboard sync (phone↔Mac).
+
+## P5 — Polish
+
+- [ ] Photo preview fallback for images without EXIF thumbnails (full pull + resize); video thumbnail generation.
+- [ ] Sign and notarize PhoneStream.app (currently ad-hoc signed — Gatekeeper may warn on first launch).
+- [ ] One-click streaming: open video with a single click in ADBFileExplorer (requires Flutter rebuild of FileDroid).

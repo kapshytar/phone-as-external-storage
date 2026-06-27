@@ -8,7 +8,7 @@ source "$(cd "$(dirname "$0")" && pwd)/config.sh"
 
 # IP: из переменной окружения или из кэша — НЕ хардкодим
 IP="${PHONE_IP:-$(phone_ip)}"
-MNT="$HOME/PhoneWiFi"
+MNT="$HOME/Phone-WiFi"
 LOG="$HOME/PhoneAsExtStorage/phone-wifi-watchdog.log"
 LOCK=/tmp/phone-wifi-watchdog.lock
 mkdir "$LOCK" 2>/dev/null || exit 0

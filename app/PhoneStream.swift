@@ -547,7 +547,7 @@ RULE:
     }
     @objc func toggleSSH() {
         if state.wifiSsh { alert("Wi-Fi SSH", "Working (port 8022). This is the phone's server channel — no need to turn it off here."); return }
-        runCmd("IP=$(cat ~/.phone_wifi_ip 2>/dev/null); IP=${IP:-192.168.1.202}; KEY=$HOME/.ssh/id_ed25519_phone; ssh -i \"$KEY\" -p 8022 -o StrictHostKeyChecking=no -o ConnectTimeout=6 u0_a520@\"$IP\" 'pgrep -x sshd >/dev/null || sshd' 2>/dev/null; sleep 1; nc -z -G2 \"$IP\" 8022 && echo OK") { [weak self] _, out in
+        runCmd("IP=$(cat ~/.phone_wifi_ip 2>/dev/null); KEY=$HOME/.ssh/id_ed25519_phone; ssh -i \"$KEY\" -p 8022 -o StrictHostKeyChecking=no -o ConnectTimeout=6 u0_a520@\"$IP\" 'pgrep -x sshd >/dev/null || sshd' 2>/dev/null; sleep 1; nc -z -G2 \"$IP\" 8022 && echo OK") { [weak self] _, out in
             guard let self = self else { return }
             if out.contains("OK") { self.failed.remove("ssh") }
             else { self.failed.insert("ssh"); self.alert("SSH not responding", "Phone unreachable over SSH. Launch the \"Start-SSHD\" widget on the phone, or wait — the watchdog will bring it up.") }
@@ -566,9 +566,9 @@ RULE:
     }
     @objc func toggle5555() {
         if state.wd5555 {
-            runCmd("IP=$(cat ~/.phone_wifi_ip 2>/dev/null); IP=${IP:-192.168.1.202}; \(adb) disconnect \"$IP:5555\" >/dev/null 2>&1; echo done") { _, _ in }
+            runCmd("IP=$(cat ~/.phone_wifi_ip 2>/dev/null); \(adb) disconnect \"$IP:5555\" >/dev/null 2>&1; echo done") { _, _ in }
         } else {
-            runCmd("IP=$(cat ~/.phone_wifi_ip 2>/dev/null); IP=${IP:-192.168.1.202}; nc -z -G1 \"$IP\" 5555 && \(adb) connect \"$IP:5555\" >/dev/null 2>&1; sleep 1; \(adb) devices | grep ':5555' | grep -wq device && echo OK") { [weak self] _, out in
+            runCmd("IP=$(cat ~/.phone_wifi_ip 2>/dev/null); nc -z -G1 \"$IP\" 5555 && \(adb) connect \"$IP:5555\" >/dev/null 2>&1; sleep 1; \(adb) devices | grep ':5555' | grep -wq device && echo OK") { [weak self] _, out in
                 guard let self = self else { return }
                 if out.contains("OK") { self.failed.remove("tcp5555") }
                 else { self.failed.insert("tcp5555"); self.alert("5555 unavailable", "adbd isn't listening on 5555 (it disappears after a phone reboot). Bring the phone up via USB or Wireless-debug first.") }

@@ -1,6 +1,6 @@
-# ADB Turbo S/T/M — Stream Transfer Mount
+# PhoneStream — Android Phone as External Storage on macOS
 
-> Mount your Android phone as a Finder volume on macOS, via ADB + rclone/SFTP. 100% free & open-source.
+> App-centric access to your Android phone from the Mac menubar. Browse files in ADBFileExplorer, stream video directly to IINA, transfer via rclone/adb — no MTP, no copy required for playback.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2011%2B-lightgrey?logo=apple)](https://github.com/kapshytar/adb-turbo-s-t-m)
@@ -16,57 +16,67 @@ Android dropped USB Mass Storage years ago. Existing options each have tradeoffs
 - **Android File Transfer** — unmaintained, crashes on macOS 13+
 - **MTP** — slow (5–15 MB/s), connection drops, unreliable on macOS
 - **MacDroid / Commander One** — paid, closed-source
-- **OpenMTP** — copy workflow only, no Finder volume, no streaming
-- **Raw adbfs / sshfs** — CLI only, no setup wizard, fragile across Android updates
+- **OpenMTP** — copy workflow only, no streaming
+- **Raw adbfs / sshfs** — CLI only, fragile across Android updates
 
-This project mounts your Android phone as a real Finder volume with no-copy streaming, using ADB + rclone/SFTP over Termux sshd.
-
----
-
-## What You Get
-
-- **Phone as a Finder volume** — mounted at `~/PhoneStream`, appears like any external drive
-- **No-copy streaming** — open videos, photos, documents directly from the phone; nothing is copied to your Mac
-- **Multi-threaded reads** — rclone `--vfs-read-chunk-streams` pulls in parallel chunks
-- **Read/write** — copy files back to the phone, edit documents in place (VFS write-back cache)
-- **Auto transport selection** — USB mode via `adb forward` or Wi-Fi via Wireless Debugging (mDNS), with automatic fallback
-- **Menubar app** — switch transport, reconnect, mount/unmount — no Terminal required
-- **Silent server mode** — screen stays dark, adaptive wake-lock (CPU active only when SSH session is open, deep sleep otherwise)
-- **Screen mirror** — control your phone screen from the Mac via the built-in Screen Mirror button (powered by scrcpy)
-- **Setup wizard** — `./setup.sh` walks you through every step; safe to re-run
+**What nothing else does:** seamless automatic USB↔Wi-Fi failover combined with no-copy media streaming to IINA. This project wires those pieces together with a menubar app so you never touch the terminal for day-to-day use.
 
 ---
 
-## Speed
+## How it works: 4 connection channels
 
-**Tested setup:** Samsung Galaxy S10+ (Android 12), Intel Mac (T2 chip), USB 3 cable, ~300 MB file. Results are single-run measurements, not a formal benchmark.
+The **PhoneStream** tray app manages four channels and picks the best available one automatically:
 
-| Method | Speed | Notes |
-|--------|-------|-------|
-| USB 3 + adbfs (FUSE Mode) | ~175 MB/s | Large transfers, Finder integration, EXIF thumbnails |
-| USB + rclone/sftp (Stream Mode) | ~110–140 MB/s | No-copy streaming, good for video |
-| Wi-Fi 5 GHz | ~20–40 MB/s | Bottleneck is Android power-saving latency, not the radio |
-| MTP over USB (built-in macOS) | 5–15 MB/s | Baseline for comparison |
+| Channel | When used | Notes |
+|---------|-----------|-------|
+| **USB — adb** | USB cable connected | Highest speed and reliability; preferred for transfers and streaming |
+| **Wi-Fi — SSH :8022** | USB unavailable, Termux sshd reachable | Used for file streaming via rclone; multithreaded range requests |
+| **Wireless Debugging — mDNS** | Android 11+, WD enabled | Auto-discovery via `adb mdns services`; no manual IP needed |
+| **adb :5555 (legacy)** | Fallback if `service.adb.tcp.port=5555` is set | Not reboot-proof; not available on Samsung by default |
 
-> Use USB for anything serious. Wi-Fi adds latency because Android's Wi-Fi chip aggressively power-saves between packets — the radio is fast, the wakeup isn't.
-
----
-
-## Tradeoffs vs alternatives
-
-| | **ADB Turbo S/T** | MacDroid | OpenMTP | Android File Transfer | adbfs / sshfs (raw) |
-|---|---|---|---|---|---|
-| Finder volume mount | yes | yes | no | no | yes (manual) |
-| No-copy streaming | yes | no | no | no | no |
-| Multi-threaded reads | yes | no | no | no | no |
-| Write support | yes | yes | no | no | partial |
-| GUI / menubar app | yes | yes | yes | yes | no |
-| Free & open-source | yes | no (paid) | yes | yes (unmaintained) | yes (CLI only) |
-| Transport | ADB (USB + Wi-Fi) | MTP | MTP | MTP | ADB / SSH |
+The app keeps a USB keepalive running in the background (prevents macOS from suspending the USB port at 85% charge) and caches the phone's Wi-Fi IP for instant fallback.
 
 ---
 
-## Quick Start
+## What you get
+
+- **File browser** — ADBFileExplorer shows directory listings instantly over any channel; no Finder volume needed to browse
+- **No-copy streaming** — open videos directly in IINA via HTTP range requests; the file never lands on your Mac
+- **Bulk transfers** — `adb pull` at ~175 MB/s over USB; rclone/SFTP for structured copy jobs
+- **FUSE mount (optional, USB only)** — mount as a Finder volume for applications that need a file path (`~/Phone-USB`); reliable only over USB
+- **Menubar app** — connect, stream, browse, mount/unmount without opening Terminal
+- **Auto-transport** — USB→Wi-Fi failover is automatic; the active channel is shown in the Connection Center
+- **Screen mirror** — `scrcpy` launched from the tray (uses your locally-installed scrcpy)
+- **Setup wizard** — `./setup.sh` installs all dependencies and configures SSH keys; safe to re-run
+
+---
+
+## Speed — by mode
+
+Tested: Samsung Galaxy S10+ (Android 12), Intel Mac (T2 chip), USB 3 cable. Results are representative, not a formal benchmark.
+
+| Mode | Typical speed | Notes |
+|------|--------------|-------|
+| `adb pull` over USB | ~175 MB/s | Bulk file transfer, most reliable |
+| rclone/SFTP via `adb forward` (USB) | ~110–140 MB/s | Structured copy; multithread |
+| HTTP range stream via `adb exec-out` (USB) | ~27 MB/s | No-copy playback in IINA; USB path |
+| Wi-Fi SSH multistream (5 GHz) | ~25 MB/s | Ceiling is Wi-Fi radio + phone power-saving latency, not the channel |
+| Wi-Fi HTTP range stream | ~7 MB/s per chunk | Fallback when USB unavailable |
+| MTP over USB (macOS built-in) | 5–15 MB/s | Baseline for comparison |
+
+> Wi-Fi speed is capped by Android's aggressive power-saving: the radio is fast (802.11ac 5 GHz capable of 30–75 MB/s), but ping latency spikes to 35–88 ms between packets. Multi-stream rclone helps on explicit transfers; it does not fix mount latency.
+
+---
+
+## Browsing vs. mounting
+
+**For browsing and streaming:** use ADBFileExplorer + IINA. Discrete adb calls with timeouts are safe; a persistent FUSE mount over Wi-Fi is not — if the connection flaps, the mount wedges the kernel into uninterruptible I/O (D-state), freezing Finder and Activity Monitor until the adb connection is physically severed.
+
+**For mounting (giving a file path to an application):** USB-only FUSE mount (`~/Phone-USB`) is stable. Wi-Fi mount is a last resort — use it only when USB is unavailable and expect the watchdog to force-unmount if the connection drops.
+
+---
+
+## Quick start
 
 **Mac:**
 
@@ -76,7 +86,7 @@ cd adb-turbo-s-t-m
 ./setup.sh
 ```
 
-The wizard installs all dependencies (macFUSE, rclone official binary, ADB), configures SSH keys and the rclone remote, and creates Desktop launchers. Safe to re-run — already-done steps are skipped. `setup.sh` auto-detects your architecture (Intel/Apple Silicon) and installs the correct rclone binary.
+The wizard installs dependencies (macFUSE, official rclone binary, ADB platform tools), configures SSH keys and the rclone remote, and creates launchers. Safe to re-run — completed steps are skipped. Detects Intel vs. Apple Silicon automatically.
 
 **Phone (Termux, one-liner):**
 
@@ -84,115 +94,124 @@ The wizard installs all dependencies (macFUSE, rclone official binary, ADB), con
 curl -fsSL https://raw.githubusercontent.com/kapshytar/adb-turbo-s-t-m/master/scripts/termux-init.sh | bash
 ```
 
-> Inspect the script before running: download it first with `curl -fsSL <url> -o termux-init.sh`, review it, then run `bash termux-init.sh`.
+> Inspect the script before running: `curl -fsSL <url> -o termux-init.sh`, review it, then `bash termux-init.sh`.
 
-This installs `openssh`, sets up `sshd`, grants storage access, and starts the server. After that, launch **PhoneStream** from your Mac menubar.
-
----
-
-## How It Works
-
-Two complementary mount stacks — pick the one that fits your use case:
-
-### Stream Mode (rclone + Termux sshd) — recommended for video / large files
-
-```
-Mac Finder (~/PhoneStream)
-    └── rclone mount  [multi-stream sftp, VFS cache]
-        └── adb forward tcp:8022  [USB or Wi-Fi tunnel]
-            └── Termux sshd  [port 8022, ed25519 key]
-                └── Android storage (/storage/emulated/0)
-```
-
-No-copy streaming. Files never leave the phone. Multi-threaded reads via `--vfs-read-chunk-streams`.
-
-### FUSE Mode (adbfs + macFUSE) — recommended for Finder integration / EXIF thumbnails
-
-```
-Mac Finder (~/Phone, ~/Phone-SD)
-    └── macFUSE kernel driver
-        └── adbfs-rootless (patched, ADBFS_ROOT env)
-            └── ADB over USB / Wi-Fi
-                └── Android phone
-```
-
-Full FUSE volume: photo thumbnails, Spotlight indexing, SD card auto-detection. Note: adbfs copies to `/tmp` on file open — for true streaming use Stream Mode.
+Installs openssh, configures sshd on port 8022, grants storage access, starts the server. After that, launch **PhoneStream** from the Mac menubar.
 
 ---
 
-## Compatibility / Requirements
+## Requirements
+
+### Mac
+
+| Component | Notes |
+|-----------|-------|
+| macOS 11 Big Sur+ | |
+| rclone — **official binary from downloads.rclone.org** | The Homebrew rclone does **not** support `mount` on macOS ("not supported when installed via Homebrew"). `setup.sh` downloads the correct binary. Apple Silicon path: `/opt/homebrew` is searched but the official binary is installed separately. |
+| macFUSE | Requires kext approval + reboot: System Settings → Privacy & Security → allow → reboot. **Apple Silicon:** Reduced Security must be enabled in Recovery before kext approval works. Alternative: [FUSE-T](https://www.fuse-t.org) (no kext required). |
+| IINA | For no-copy video streaming. `setup.sh` will prompt to install if missing. |
+| adb (platform-tools ≥ 31) | Required for Wireless Debugging mDNS auto-discovery. |
 
 ### Phone (Android)
 
 | Feature | Requirement | Notes |
 |---------|-------------|-------|
-| Termux (sshd, Stream Mode) | Android **7.0+** | Termux minimum requirement |
-| USB transport (adb forward) | Any Android with USB Debugging | Works on all brands |
-| Wi-Fi / Wireless Debugging (mDNS auto-discovery) | **Android 11+** recommended | On older Android: USB only, or legacy `adb tcpip` (not reliable) |
-| Samsung devices | Wi-Fi: Wireless Debugging only | Knox blocks legacy `adb tcpip 5555` → use Wireless Debugging or USB |
-| Termux:Boot (auto-start sshd) | Optional | Install from F-Droid |
-| Termux:Widget | Optional | Install from F-Droid |
-
-**Install Termux from [F-Droid](https://f-droid.org), not the Play Store** — the Play Store build is outdated.
-
-Tested on: **Samsung Galaxy S10+ (Android 12)**. Should work on most Android devices; Samsung-specific caveats are noted above.
-
-### Mac (macOS)
-
-| Component | Requirement | Notes |
-|-----------|-------------|-------|
-| macOS | **11 Big Sur+** | |
-| rclone binary | Intel or Apple Silicon | `setup.sh` auto-detects architecture and downloads the correct binary |
-| macFUSE | Requires kext approval + **reboot** | System Settings → Privacy & Security → allow → reboot |
-| macFUSE on Apple Silicon | Needs lowered security in Recovery for KEXT | Alternative: [FUSE-T](https://www.fuse-t.org) (no kext required) |
+| Termux | Android 7.0+ | Install from [F-Droid](https://f-droid.org), **not the Play Store** — the Play Store build is outdated |
+| Termux:Boot | Optional | Auto-starts sshd after phone reboot; install from F-Droid |
+| openssh in Termux | Any | `pkg install -y openssh`; sshd on port 8022 |
+| SSH key (no passphrase) | Required | `setup.sh` generates and installs `~/.ssh/id_ed25519_phone` |
+| Wireless Debugging + mDNS | Android 11+ | Required for Wi-Fi auto-discovery without a USB cable |
+| Samsung / OneUI | — | `protect_battery` (charge limit at ~85%) causes USB port suspension at that threshold — `setup.sh` addresses this. Knox blocks `adb tcpip 5555`; use Wireless Debugging instead. `adb mdns services` may appear empty on macOS even when WD is active — restart the adb server (`adb kill-server && adb start-server`) before concluding WD is off. |
 
 ---
 
-## Hardening & Longevity
+## Architecture
 
-For always-on server use — keeping the phone running reliably as headless storage.
+### Streaming (recommended for video / large files)
+
+```
+IINA  ←  HTTP range request
+              └── phone-stream.sh
+                    ├── USB path: adb exec-out → local HTTP server → IINA
+                    └── Wi-Fi path: rclone serve http over SSH → IINA
+```
+
+Files never leave the phone. IINA seeks via HTTP 206 range requests.
+
+### File browser (recommended for navigation)
+
+```
+ADBFileExplorer (Python/Qt)
+    └── adb shell ls  [discrete call, 25 s timeout]
+        └── USB serial  or  Wi-Fi adb endpoint
+```
+
+Each directory listing is a single `adb ls` call. No persistent connection; timeouts prevent D-state freezes.
+
+### FUSE mount (optional, USB only — for "give a path to an app")
+
+```
+~/Phone-USB  (Finder volume)
+    └── macFUSE
+        └── adbfs-rootless (patched, ADBFS_ROOT env)
+            └── adb over USB
+```
+
+Stable over USB. Wi-Fi FUSE mount is not recommended — connection flap wedges the kernel.
+
+---
+
+## Hardening for always-on use
+
+### Battery longevity
+
+- **Samsung:** enable *Settings → Battery → Protect battery* (limits charge to ~80–85%). Note: this causes USB port suspension at the threshold because the phone stops drawing current — macOS then suspends the port. The keepalive in PhoneStream mitigates this with `caffeinate`; for a permanent server role, prefer wall charger + Wi-Fi over a Mac USB port.
+- Use a quality cable; ensure ventilation around the phone.
+
+### Android power management
+
+- Set **Battery → Termux → Unrestricted** and allow autostart for Termux and Termux:Boot.
+- **Phantom process killer** (Android 12+): `adb shell device_config put activity_manager max_phantom_processes 2147483647` — `phone-restrict.sh lift` handles this.
+- After a phone reboot: unlock the screen once (credential-encrypted storage is locked at boot). Wireless Debugging may have reset — keep a USB cable as a recovery path.
 
 ### rclone / VFS cache
 
-- **`--vfs-cache-mode writes`** (default) — enables full write-back caching; required for writes to work correctly. `minimal` mode does **not** support writes.
-- **`--vfs-cache-mode full`** — only needed if apps require random-seek access or in-place editing (e.g. SQLite databases). Has higher local disk usage.
-- **`--vfs-read-chunk-streams 8`** (default) — sweet spot is 4–8 parallel streams. Higher values can saturate phone CPU or flash I/O without improving speed.
+- **`--vfs-cache-mode writes`** — required for write support. `minimal` mode does **not** support writes (verified).
+- **`--vfs-cache-mode full`** — only needed for random-seek access (e.g. SQLite). Higher local disk usage.
+- **`--vfs-read-chunk-streams 8`** — sweet spot is 4–8 parallel streams. Higher values can saturate phone CPU or flash I/O without improving throughput.
 
 ### Security
 
-- **SSH over adb forward (recommended):** keep `sshd` bound to `127.0.0.1` — accessible only through `adb forward tcp:8022`, invisible to the network. No open port, no exposure.
-- **SSH over direct LAN/VPN access:** use a dedicated SSH key for mount only, set `PasswordAuthentication no`, restrict the user, and add `from=<LAN/VPN subnet>` in `~/.ssh/authorized_keys` on the phone.
-- **Wireless Debugging:** enable only on trusted (home/VPN) networks. Disable when not in use.
-
-### Android power & process management
-
-- In Android Settings: set **Battery → Termux → Unrestricted** and allow autostart for Termux and Termux:Boot. Without this, Android may kill the sshd process.
-- **Phantom process killer** (Android 12+): disable via `adb shell device_config put activity_manager max_phantom_processes 2147483647` — `phone-restrict.sh lift` does this automatically.
-- After a phone reboot: the screen must be unlocked once (credential-encrypted storage is locked at boot). Wireless Debugging may also reset → keep a USB cable as a recovery path.
-
-### Physical / hardware
-
-- For permanent charging: enable **battery charge limit at 80–85%** (Samsung: *Settings → Battery → Protect battery*). Continuous 100% charging degrades the battery and risks swelling.
-- Use a quality cable and ensure adequate ventilation around the phone.
+- **SSH over adb forward (default):** sshd bound to `127.0.0.1` — accessible only through `adb forward tcp:8022`, not visible on the network.
+- **Direct LAN/VPN access:** use a dedicated mount-only SSH key, set `PasswordAuthentication no`, and restrict with `from=<subnet>` in `authorized_keys`.
+- **Wireless Debugging:** enable only on trusted networks. Disable when not in use.
 
 ### Write durability
 
-- rclone write-back cache flushes after ~5 seconds. **Do not unplug the cable or put the Mac to sleep immediately after copying large files** — data may still be uploading to the phone.
-- A hung mount is recovered automatically: `phone-stream-up.sh` performs force-unmount + remount if needed.
+rclone write-back cache flushes after ~5 seconds. Do not unplug the cable or sleep the Mac immediately after copying large files.
 
-### Known limitation: concurrent edits
+---
 
-SFTP has no push-notification protocol. If a file is modified from the phone while the FUSE mount is active, the Mac may not see the change immediately. Remount to force a refresh.
+## Tradeoffs vs. alternatives
+
+| | **PhoneStream** | MacDroid | OpenMTP | Android File Transfer | adbfs / sshfs (raw) |
+|---|---|---|---|---|---|
+| File browser | yes (ADBFileExplorer) | yes (Finder) | yes | yes | no |
+| No-copy streaming to IINA | yes | no | no | no | no |
+| Automatic USB↔Wi-Fi failover | yes | no | no | no | no |
+| FUSE mount | yes (USB only) | yes | no | no | yes (manual) |
+| Write support | yes | yes | no | no | partial |
+| Menubar app | yes | yes | yes | yes | no |
+| Free & open-source | yes* | no (paid) | yes | yes (unmaintained) | yes (CLI only) |
+| Transport | ADB + SSH | MTP | MTP | MTP | ADB / SSH |
+
+*Components (adbfs, ADBFileExplorer, FileDroid) are GPLv3 — build from source; no pre-built binaries for those components.
 
 ---
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for the full list. Implemented features include screen mirroring (Screen Mirror button in the menubar app, powered by scrcpy). Coming next:
-
-- Auto-reconnect on sleep/wake
-- Apple Silicon native build (arm64 rclone + FUSE-T default)
-- Menubar app: volume usage graph, transfer progress
+See [ROADMAP.md](ROADMAP.md).
 
 ---
 
@@ -203,19 +222,21 @@ See [ROADMAP.md](ROADMAP.md) for the full list. Implemented features include scr
 | macFUSE | Benjamin Fleischer et al. | BSD + FUSE | [macfuse.github.io](https://macfuse.github.io) |
 | rclone | Nick Craig-Wood et al. | MIT | [rclone.org](https://rclone.org) |
 | Termux | Termux contributors | GPL / MIT | [termux.dev](https://termux.dev) |
+| IINA | IINA contributors | GPL-3.0 | [iina.io](https://iina.io) |
 | adbfs-rootless | spion | **GPLv3** | [github.com/spion/adbfs-rootless](https://github.com/spion/adbfs-rootless) |
 | ADBFileExplorer | Aldeshov | **GPLv3** | [github.com/Aldeshov/ADBFileExplorer](https://github.com/Aldeshov/ADBFileExplorer) |
-| FileDroid | andrisasuke | — | [github.com/andrisasuke/filedroid](https://github.com/andrisasuke/filedroid) |
+| FileDroid | andrisasuke | **GPLv3** | [github.com/andrisasuke/filedroid](https://github.com/andrisasuke/filedroid) |
 | scrcpy | Genymobile | Apache-2.0 | [github.com/Genymobile/scrcpy](https://github.com/Genymobile/scrcpy) |
 
-> Screen mirroring is powered by **scrcpy** — we don't bundle or redistribute it; the app just launches your locally-installed `scrcpy` (offers to `brew install` it if missing).
+> Screen mirroring is powered by **scrcpy** — not bundled; the app launches your locally-installed `scrcpy` (offers `brew install scrcpy` if missing).
 
-> The `adbfs` binary is **GPLv3** (upstream). This repo provides a patch only — build it yourself from upstream source. Do not redistribute the binary.
+> **GPLv3 components** (adbfs-rootless, ADBFileExplorer, FileDroid): this repo provides patches and wrappers only. Build from upstream source; do not redistribute the binaries.
 
 ---
 
 ## License
 
-Scripts and menubar app (`setup.sh`, `scripts/`, app source) are released under the **MIT License** — see [LICENSE](LICENSE).
+Scripts and the PhoneStream menubar app (`setup.sh`, `scripts/`, app source) are released under the **MIT License** — see [LICENSE](LICENSE).
 
 adbfs-rootless (upstream) remains GPLv3. Build separately and apply `patch/adbfs-root-env.patch`.
+ADBFileExplorer and FileDroid remain GPLv3. Our changes are available in the respective forks.
