@@ -227,10 +227,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         // ---- file browsers ----
-        menu.addItem(item("Open FileDroid", #selector(openBrowser), "b"))
-        menu.addItem(item("Open ADB Explorer", #selector(openAdbExplorer), ""))
-        menu.addItem(item("⬇︎ Download from internet to phone", #selector(downloadToPhone), ""))
-        menu.addItem(item("⬆︎ Upload to phone (fast, multi-stream)", #selector(uploadToPhone), ""))
+        let bFD = item("Open FileDroid", #selector(openBrowser), "b")
+        bFD.toolTip = "Browse the phone (adb). Opening a file = adb pull (single-stream); double-click a video = stream in IINA, no download. Best for: browsing, picking files, watching video."
+        menu.addItem(bFD)
+        let bADB = item("Open ADB Explorer", #selector(openAdbExplorer), "")
+        bADB.toolTip = "Same as FileDroid — adb-based browser with EXIF photo previews and click-to-stream. Best for: browsing and previews."
+        menu.addItem(bADB)
+        let dItem = item("⬇︎ Download from internet to phone", #selector(downloadToPhone), "")
+        dItem.toolTip = "rclone copyurl over SFTP (single stream). Pulls a web URL straight onto the phone (/sdcard/Download), bypassing the Mac disk. Best for: grabbing a download link directly to the phone. Needs Wi-Fi SSH."
+        menu.addItem(dItem)
+        let uItem = item("⬆︎ Upload to phone (fast, multi-stream)", #selector(uploadToPhone), "")
+        uItem.toolTip = "rclone copy over SFTP, --transfers 8 + multi-thread (MAX speed). Auto channel USB→Wi-Fi. Best for: bulk uploads, many/large files (~24 MB/s Wi-Fi, faster on USB). → /sdcard/Download."
+        menu.addItem(uItem)
+        menu.addItem(item("  ⓘ Transfers — which for what", #selector(helpTransfers), ""))
         menu.addItem(.separator())
 
         // ---- USB volume ----
@@ -365,6 +374,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // ---- download from internet straight to phone (bypasses Mac disk) ----
     // FIX #4: URL scheme validation; accessoryView before initialFirstResponder; portable rclone path
+    // ---- onboarding: which transfer method for what ----
+    @objc func helpTransfers() {
+        alert("Transfers — which for what",
+"""
+PUT FILES ON THE PHONE
+• ⬆︎ Upload to phone (fast, multi-stream) — rclone copy over SFTP, --transfers 8 + multi-thread. The FASTEST way. Auto channel: USB → Wi-Fi. Use for: bulk / many / large files. → /sdcard/Download.
+• ⬇︎ Download from internet to phone — rclone copyurl over SFTP (single stream). Pulls a web URL straight onto the phone, the Mac disk is never touched. Use for: a download link you want on the phone.
+
+GET / VIEW FILES FROM THE PHONE
+• Open FileDroid / ADB Explorer — adb-based browser. Opening a file = adb pull (single-stream). Double-click a video = streamed in IINA, NOT downloaded. Use for: browsing, previews, watching video.
+• Mount USB / Wi-Fi folder (Finder) — gives another Mac app a real file path via FUSE. Single-stream, and Wi-Fi mount is slow / can hang. Use ONLY when an app needs a path; not for bulk transfer or browsing big folders.
+
+SPEED CHEAT-SHEET
+• Max throughput, many files → Upload button (multi-stream rclone) or, from phone, rclone/Cyberduck.
+• USB ~ fastest & most stable; Wi-Fi SSH ~24 MB/s multi-stream; a single huge file over Wi-Fi ~7 MB/s (one stream).
+• Watch video → browser → IINA (range stream, instant, no copy). Never double-click a big video in a Finder mount (it downloads the whole file).
+""")
+    }
+
     // ---- fast multi-threaded upload to the phone (rclone copy over SFTP) ----
     @objc func uploadToPhone() {
         let panel = NSOpenPanel()
