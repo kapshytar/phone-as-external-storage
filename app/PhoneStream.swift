@@ -5,8 +5,23 @@ import Cocoa
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     let adb = NSString(string: "~/Library/Android/sdk/platform-tools/adb").expandingTildeInPath
-    var busy = false
+    // FIX #3: busy is now a counter so parallel operations don't clobber each other
+    var busyCount = 0
+    var busy: Bool { busyCount > 0 }
     var failed = Set<String>()   // channels whose last connect attempt failed (shown red)
+
+    // FIX #1: cached phone state — populated by background timer, read by menuNeedsUpdate
+    struct PhoneState {
+        var model      = ""
+        var usbMounted  = false
+        var wifiMounted = false
+        var usbAdb      = false
+        var wifiSsh     = false
+        var wdMdns      = false
+        var wd5555      = false
+    }
+    var state = PhoneState()
+    var refreshTimer: Timer?
 
     // ---- bundled script paths ----
     var mountScript:    String { (Bundle.main.resourcePath ?? "") + "/phone-mount.sh" }
@@ -27,8 +42,51 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else { statusItem.button?.title = "📱" }
         let menu = NSMenu(); menu.delegate = self; statusItem.menu = menu
         startKeepalive()   // keep the USB link hot while the tray runs
+
+        // FIX #1: prime the cache immediately, then refresh every 4 s
+        scheduleBackgroundRefresh()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: true) { [weak self] _ in
+            self?.scheduleBackgroundRefresh()
+        }
     }
-    func applicationWillTerminate(_ note: Notification) { stopKeepalive() }
+    func applicationWillTerminate(_ note: Notification) {
+        refreshTimer?.invalidate()
+        stopKeepalive()
+    }
+
+    // FIX #1: background state refresh — all sh() calls happen off the main thread
+    func scheduleBackgroundRefresh() {
+        let adbPath = adb
+        DispatchQueue.global().async { [weak self] in
+            guard let self = self else { return }
+            var s = PhoneState()
+            s.usbMounted  = self.usbMounted()
+            s.wifiMounted = self.wifiMounted()
+            s.usbAdb      = self.usbAdbOn()
+            s.wifiSsh     = self.wifiSshOn()
+            s.wdMdns      = self.wdMdnsOn()
+            s.wd5555      = self.wd5555On()
+            // model: prefer USB device, fall back to any connected device
+            let usbDev = self.sh("\(adbPath) devices | awk '/\\tdevice$/{print $1}' | grep -v _adb-tls | grep -v ':' | head -1")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !usbDev.isEmpty {
+                s.model = self.sh("\(adbPath) -s \(usbDev) shell getprop ro.product.model")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                let anyDev = self.sh("\(adbPath) devices | awk '/\\tdevice$/{print $1}' | head -1")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !anyDev.isEmpty {
+                    s.model = self.sh("\(adbPath) -s \(anyDev) shell getprop ro.product.model")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+            // FIX #1: autoConnectWD moved here — side-effects belong in background, not in menu drawing
+            self.autoConnectWD()
+            DispatchQueue.main.async { [weak self] in
+                self?.state = s
+            }
+        }
+    }
 
     // ---- keepalive: ping the phone so macOS doesn't suspend the USB port ----
     func startKeepalive() {
@@ -44,11 +102,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         try? p.run(); p.waitUntilExit()
     }
 
-    // ---- state helpers ----
+    // ---- state helpers (called from background thread only) ----
     func sh(_ cmd: String) -> String {
         let t = Process(); t.launchPath = "/bin/bash"; t.arguments = ["-c", cmd]
         let pipe = Pipe(); t.standardOutput = pipe; t.standardError = pipe
-        t.launch(); t.waitUntilExit()
+        // FIX #6: t.launch() → try? t.run()
+        try? t.run(); t.waitUntilExit()
         return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     }
 
@@ -97,21 +156,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return sh("\(adb) -s \(dev) shell getprop ro.product.model")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+    // FIX #1: transportLabel reads from cached state.model — no sh() calls
     // section title per channel device: "SM-G975F (USB)" / "SM-G975F (Wi-Fi · SSH)"
     func transportLabel(_ wifi: Bool, _ chan: String) -> String {
+        let m = state.model
         if wifi {
-            let m = phoneModel()
             return m.isEmpty ? "\(chan) volume" : "\(m) (\(chan))"
         }
-        let dev = sh("\(adb) devices | awk '/\\tdevice$/{print $1}' | grep -v _adb-tls | grep -v ':' | head -1")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if dev.isEmpty { return "\(chan) volume" }
-        let m = sh("\(adb) -s \(dev) shell getprop ro.product.model")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         return m.isEmpty ? "\(chan) volume" : "\(m) (\(chan))"
     }
 
-    // ---- build menu ----
+    // ---- build menu — reads ONLY state.*, no sh() calls ----
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
@@ -124,14 +179,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
-        let usbM  = usbMounted()
-        let wifiM = wifiMounted()
-        let usbA  = usbAvailable()
-        let wifiA = wifiAvailable()
+        // FIX #1: read from cache — zero sh() calls here
+        let usbM  = state.usbMounted
+        let wifiM = state.wifiMounted
+        let usbA  = state.usbAdb
+        let wifiA = state.wifiSsh
 
         // ---- status line: dot = REACHABLE (any channel), not "mounted" ----
-        let model = phoneModel()
-        let reach = usbAdbOn() || wifiSshOn()
+        let model = state.model
+        let reach = state.usbAdb || state.wifiSsh
         var mounted: [String] = []
         if usbM  { mounted.append("USB") }
         if wifiM { mounted.append("Wi-Fi") }
@@ -143,17 +199,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         // ---- CONNECTION CENTER: transparent status of the 4 channels ----
-        autoConnectWD()  // admin channel not disabled; if advertised, connect automatically
+        // FIX #1: autoConnectWD() moved to background refresh — removed from here
         let chHdr = NSMenuItem(title: "Channels (click to toggle · hover for help)", action: nil, keyEquivalent: ""); chHdr.isEnabled = false
         menu.addItem(chHdr)
         // 4 channels separately, each a clickable toggle; red = connect failed
-        addChannel(menu, "USB (cable) — files + commands", usbAdbOn(), "usb", #selector(toggleUSB),
+        addChannel(menu, "USB (cable) — files + commands", state.usbAdb, "usb", #selector(toggleUSB),
                    "Cable (adb). File push/pull + commands (pm, scrcpy, logcat). Click to reconnect (re-enumerate). If the port is asleep, replug the DATA cable.")
-        addChannel(menu, "Wi-Fi SSH (8022) — files, no cable", wifiSshOn(), "ssh", #selector(toggleSSH),
+        addChannel(menu, "Wi-Fi SSH (8022) — files, no cable", state.wifiSsh, "ssh", #selector(toggleSSH),
                    "Direct SSH over Wi-Fi (8022). Main channel for files/streaming, ~25 MB/s, multi-stream. Click to check/restart sshd. Not visible in adb apps.")
-        addChannel(menu, "Wireless-debug (mDNS) — admin adb", wdMdnsOn(), "wdmdns", #selector(toggleWDmdns),
+        addChannel(menu, "Wireless-debug (mDNS) — admin adb", state.wdMdns, "wdmdns", #selector(toggleWDmdns),
                    "adb over Wi-Fi via mDNS (dynamic port). Admin commands: scrcpy, pm, logcat. Click: off → connect, on → disconnect. The WD toggle itself is enabled on the phone.")
-        addChannel(menu, "adb TCP 5555 (legacy) — admin adb", wd5555On(), "tcp5555", #selector(toggle5555),
+        addChannel(menu, "adb TCP 5555 (legacy) — admin adb", state.wd5555, "tcp5555", #selector(toggle5555),
                    "Legacy adb-over-tcp on fixed port 5555 (old method, if adbd listens). Does NOT survive a phone reboot. Click: off → connect 5555, on → disconnect.")
         menu.addItem(item("  ⓘ Which channel for what", #selector(helpChannels), ""))
         menu.addItem(item("  Check all channels", #selector(checkAll), ""))
@@ -211,6 +267,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item("Clear phone cache", #selector(clearCache), ""))
         menu.addItem(.separator())
         menu.addItem(item("Quit", #selector(quit), "q"))
+
+        // Kick off a fresh background refresh so next open is up-to-date
+        scheduleBackgroundRefresh()
     }
 
     func item(_ title: String, _ sel: Selector, _ key: String) -> NSMenuItem {
@@ -228,9 +287,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     // shared executor: output to a temp file (NOT a Pipe — a daemonized rclone inherits the fd
     // and keeps the pipe open → readDataToEndOfFile() would hang forever, freezing on "Working…").
+    // FIX #3: busyCount counter instead of bool flag; FIX #6: [weak self], try? t.run()
     private func exec(launch: String, args: [String], _ done: @escaping (Int32, String) -> Void) {
-        busy = true
-        DispatchQueue.global().async {
+        busyCount += 1
+        DispatchQueue.global().async { [weak self] in
+            guard let self = self else { return }
             let t = Process()
             t.launchPath = launch
             t.arguments = args
@@ -240,17 +301,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             t.standardOutput = fh
             t.standardError = fh
             t.standardInput = FileHandle.nullDevice
-            t.launch(); t.waitUntilExit()
+            // FIX #6: t.launch() → try? t.run()
+            try? t.run(); t.waitUntilExit()
             try? fh?.close()
             let out = (try? String(contentsOfFile: tmp, encoding: .utf8)) ?? ""
             try? FileManager.default.removeItem(atPath: tmp)
-            DispatchQueue.main.async { self.busy = false; done(t.terminationStatus, out) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.busyCount -= 1
+                done(t.terminationStatus, out)
+            }
         }
     }
 
     // ---- USB actions ----
     @objc func mountUSB() {
-        run(mountScript, ["usb"]) { code, out in
+        run(mountScript, ["usb"]) { [weak self] code, out in
+            guard let self = self else { return }
             if code == 0 { self.openUSB() } else { self.alert("USB mount failed", out) }
         }
     }
@@ -281,7 +348,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         a.addButton(withTitle: "Mount anyway")
         a.addButton(withTitle: "Cancel")
         if a.runModal() != .alertFirstButtonReturn { return }
-        run(mountScript, ["wifi"]) { code, out in
+        run(mountScript, ["wifi"]) { [weak self] code, out in
+            guard let self = self else { return }
             if code == 0 { self.openWiFi() } else { self.alert("Wi-Fi mount failed", out) }
         }
     }
@@ -289,6 +357,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func openWiFi() { NSWorkspace.shared.open(URL(fileURLWithPath: mntWiFi)) }
 
     // ---- download from internet straight to phone (bypasses Mac disk) ----
+    // FIX #4: URL scheme validation; accessoryView before initialFirstResponder; portable rclone path
     @objc func downloadToPhone() {
         let a = NSAlert()
         a.messageText = "Download from internet to phone"
@@ -297,35 +366,48 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         a.addButton(withTitle: "Cancel")
         let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 24))
         tf.placeholderString = "https://…"
+        // FIX #4: set accessoryView first, then initialFirstResponder
         a.accessoryView = tf
         a.window.initialFirstResponder = tf
         guard a.runModal() == .alertFirstButtonReturn else { return }
         let url = tf.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !url.isEmpty else { return }
+        // FIX #4: only allow http/https — block file:// and other schemes
+        guard url.lowercased().hasPrefix("http://") || url.lowercased().hasPrefix("https://") else {
+            alert("Only http/https URLs", "For security, only http:// and https:// URLs are supported.")
+            return
+        }
+        // FIX #4 + #5: portable rclone path; FIX #5: IP from ~/.phone_wifi_ip (no hardcode)
         let script = """
         URL="$1"
-        IP=$(cat ~/.phone_wifi_ip 2>/dev/null); IP=${IP:-192.168.1.202}
+        IP=$(cat ~/.phone_wifi_ip 2>/dev/null)
+        if [ -z "$IP" ]; then echo "Phone IP unknown. Connect once over USB to cache it."; exit 1; fi
         KEY=$HOME/.ssh/id_ed25519_phone
         if ! nc -z -G2 "$IP" 8022 >/dev/null 2>&1; then echo "No SSH link to the phone (8022). Bring up Wi-Fi SSH first."; exit 1; fi
-        /usr/local/bin/rclone copyurl "$URL" ":sftp,host=$IP,port=8022,user=u0_a520,key_file=$KEY,shell_type=none:/sdcard/Download" --auto-filename -q \
+        RCLONE=$(command -v rclone 2>/dev/null || echo /usr/local/bin/rclone)
+        [ -x "$RCLONE" ] || RCLONE=/opt/homebrew/bin/rclone
+        "$RCLONE" copyurl "$URL" ":sftp,host=$IP,port=8022,user=u0_a520,key_file=$KEY,shell_type=none:/sdcard/Download" --auto-filename -q \
           && echo "✅ Saved to phone: /sdcard/Download/" \
           || echo "❌ Failed (check the URL and the SSH link)."
         """
-        runCmd(script, [url]) { _, out in self.alert("Download to phone", out) }
+        runCmd(script, [url]) { [weak self] _, out in self?.alert("Download to phone", out) }
     }
 
     // ---- general ----
     @objc func mountAll() {
-        run(mountAllScript) { code, out in
+        run(mountAllScript) { [weak self] code, out in
+            guard let self = self else { return }
             if code == 0 {
-                if self.usbMounted()  { self.openUSB() }
-                if self.wifiMounted() { self.openWiFi() }
+                // FIX #1: use cached state for post-mount check
+                if self.state.usbMounted  { self.openUSB() }
+                if self.state.wifiMounted { self.openWiFi() }
             } else { self.alert("Mount all failed", out) }
         }
     }
     @objc func reconnect() {
         // "Connect everything": run through every init method for each channel + report.
-        run(rediscoverScript) { _, out in
+        run(rediscoverScript) { [weak self] _, out in
+            guard let self = self else { return }
             self.alert("Connect everything",
                 out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Done." : out)
         }
@@ -345,13 +427,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return wifi.isEmpty ? nil : wifi
     }
+    // FIX #2: serial passed as positional $1 to avoid shell injection
     @objc func mirror() {
         guard let scr = scrcpyPath() else {
             let a = NSAlert(); a.messageText = "scrcpy not installed"
             a.informativeText = "Screen mirroring uses scrcpy. Install it via Homebrew?"
             a.addButton(withTitle: "Install (brew)"); a.addButton(withTitle: "Cancel")
             if a.runModal() == .alertFirstButtonReturn {
-                runCmd("export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH; brew install scrcpy") { code, out in
+                runCmd("export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH; brew install scrcpy") { [weak self] code, out in
+                    guard let self = self else { return }
                     self.alert(code == 0 ? "scrcpy installed" : "Install failed",
                                code == 0 ? "Done — click \"Screen mirror\" again." : out)
                 }
@@ -361,12 +445,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let serial = pickDeviceSerial() else {
             alert("Phone not connected", "Connect your phone first (USB or Wi-Fi)."); return
         }
+        // FIX #2: use $1 for serial, $2 for scrcpy path — no shell interpolation of untrusted values
         let t = Process(); t.launchPath = "/bin/bash"
-        t.arguments = ["-c", "ADB=\(adb) \(scr) -s \(serial) >/dev/null 2>&1 &"]
+        t.arguments = ["-c", "ADB=\"$1\" \"$2\" -s \"$3\" >/dev/null 2>&1 &", "phonestream", adb, scr, serial]
         try? t.run()
     }
 
     // ---- clear cache ----
+    // FIX #2: serial passed as positional $1 to avoid shell injection
     @objc func clearCache() {
         let a = NSAlert(); a.messageText = "Clear all app caches on the phone?"
         a.informativeText = "Frees space by clearing every app's cache. Caches rebuild automatically when you use the apps. Your files and data are NOT touched."
@@ -375,18 +461,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let serial = pickDeviceSerial() else {
             alert("Phone not connected", "Connect your phone first (USB or Wi-Fi)."); return
         }
-        runCmd("\(adb) -s \(serial) shell pm trim-caches 9999999999999") { code, out in
+        // FIX #2: serial as $1, adb path interpolated (trusted constant)
+        runCmd("\(adb) -s \"$1\" shell pm trim-caches 9999999999999", [serial]) { [weak self] code, out in
+            guard let self = self else { return }
             self.alert(code == 0 ? "Cache cleared" : "Failed",
                        code == 0 ? "App caches cleared on the phone." : out)
         }
     }
 
     // ---- open our Python browser ADBFileExplorer ----
+    // FIX #2: path passed as $1 — no shell interpolation of path
     @objc func openAdbExplorer() {
         let runsh = NSHomeDirectory() + "/PhoneAsExtStorage/ADBFileExplorer/run.sh"
         if FileManager.default.fileExists(atPath: runsh) {
             let t = Process(); t.launchPath = "/bin/bash"
-            t.arguments = ["-lc", "cd \"$(dirname \(runsh))\" && nohup bash run.sh >/tmp/adbfe.log 2>&1 &"]
+            // FIX #2: pass runsh as positional $1
+            t.arguments = ["-lc", "cd \"$(dirname \"$1\")\" && nohup bash run.sh >/tmp/adbfe.log 2>&1 &", "phonestream", runsh]
             try? t.run()
         } else {
             alert("ADB Explorer not found", "Expected ~/PhoneAsExtStorage/ADBFileExplorer/run.sh")
@@ -418,12 +508,15 @@ RULE:
     }
 
     // ---- async SSH report (doesn't block the UI) ----
+    // FIX #3: uses busyCount; FIX #6: [weak self]
     func sshReport(_ title: String, _ cmd: String) {
-        busy = true
-        DispatchQueue.global().async {
+        busyCount += 1
+        DispatchQueue.global().async { [weak self] in
+            guard let self = self else { return }
             let out = self.sh(cmd).trimmingCharacters(in: .whitespacesAndNewlines)
-            DispatchQueue.main.async {
-                self.busy = false
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.busyCount -= 1
                 self.alert(title, out.isEmpty
                     ? "No response from the phone over SSH.\nIf sshd is fully down, launch the \"Start-SSHD\" widget on the phone (Termux:Widget) or reboot it (Termux:Boot brings sshd back up)."
                     : out)
@@ -445,48 +538,54 @@ RULE:
 
     // ---- channel toggles: touch ONLY their own channel, never the working ones ----
     @objc func toggleUSB() {
-        if usbAdbOn() { return }   // working — leave it
-        runCmd("\(adb) reconnect offline >/dev/null 2>&1; sleep 1; \(adb) devices -l | grep -q usb: && echo OK") { _, out in
+        if state.usbAdb { return }   // working — leave it
+        runCmd("\(adb) reconnect offline >/dev/null 2>&1; sleep 1; \(adb) devices -l | grep -q usb: && echo OK") { [weak self] _, out in
+            guard let self = self else { return }
             if out.contains("OK") { self.failed.remove("usb") }
             else { self.failed.insert("usb"); self.alert("USB didn't come up", "The port seems suspended. Replug the DATA cable (not charge-only) or try another port — software can't wake it.") }
         }
     }
     @objc func toggleSSH() {
-        if wifiSshOn() { alert("Wi-Fi SSH", "Working (port 8022). This is the phone's server channel — no need to turn it off here."); return }
-        runCmd("IP=$(cat ~/.phone_wifi_ip 2>/dev/null); IP=${IP:-192.168.1.202}; KEY=$HOME/.ssh/id_ed25519_phone; ssh -i \"$KEY\" -p 8022 -o StrictHostKeyChecking=no -o ConnectTimeout=6 u0_a520@\"$IP\" 'pgrep -x sshd >/dev/null || sshd' 2>/dev/null; sleep 1; nc -z -G2 \"$IP\" 8022 && echo OK") { _, out in
+        if state.wifiSsh { alert("Wi-Fi SSH", "Working (port 8022). This is the phone's server channel — no need to turn it off here."); return }
+        runCmd("IP=$(cat ~/.phone_wifi_ip 2>/dev/null); IP=${IP:-192.168.1.202}; KEY=$HOME/.ssh/id_ed25519_phone; ssh -i \"$KEY\" -p 8022 -o StrictHostKeyChecking=no -o ConnectTimeout=6 u0_a520@\"$IP\" 'pgrep -x sshd >/dev/null || sshd' 2>/dev/null; sleep 1; nc -z -G2 \"$IP\" 8022 && echo OK") { [weak self] _, out in
+            guard let self = self else { return }
             if out.contains("OK") { self.failed.remove("ssh") }
             else { self.failed.insert("ssh"); self.alert("SSH not responding", "Phone unreachable over SSH. Launch the \"Start-SSHD\" widget on the phone, or wait — the watchdog will bring it up.") }
         }
     }
     @objc func toggleWDmdns() {
-        if wdMdnsOn() {  // off: disconnect the mDNS entry/entries, without touching 5555/USB
+        if state.wdMdns {  // off: disconnect the mDNS entry/entries, without touching 5555/USB
             runCmd("for d in $(\(adb) devices | awk '/device$/{print $1}' | grep -E '_adb-tls|:[0-9]+' | grep -v ':5555'); do \(adb) disconnect \"$d\" >/dev/null 2>&1; done; echo done") { _, _ in }
         } else {        // on: warm up mDNS (no kill-server, to avoid dropping others) + connect
-            runCmd("\(adb) mdns services >/dev/null 2>&1; sleep 1; EP=$(\(adb) mdns services 2>/dev/null | awk '/_adb-tls-connect._tcp/{print $NF; exit}'); [ -n \"$EP\" ] && \(adb) connect \"$EP\" >/dev/null 2>&1; sleep 1; \(adb) devices | awk '/device$/{print $1}' | grep -E '_adb-tls|:[0-9]+' | grep -v ':5555' | grep -q . && echo OK") { _, out in
+            runCmd("\(adb) mdns services >/dev/null 2>&1; sleep 1; EP=$(\(adb) mdns services 2>/dev/null | awk '/_adb-tls-connect._tcp/{print $NF; exit}'); [ -n \"$EP\" ] && \(adb) connect \"$EP\" >/dev/null 2>&1; sleep 1; \(adb) devices | awk '/device$/{print $1}' | grep -E '_adb-tls|:[0-9]+' | grep -v ':5555' | grep -q . && echo OK") { [weak self] _, out in
+                guard let self = self else { return }
                 if out.contains("OK") { self.failed.remove("wdmdns") }
                 else { self.failed.insert("wdmdns"); self.alert("Wireless-debug didn't connect", "Enable the Wireless Debugging toggle on the phone (Settings → Developer options). It can't be enabled remotely. If it's on but not seen, click \"Connect everything\" (restarts the adb server).") }
             }
         }
     }
     @objc func toggle5555() {
-        if wd5555On() {
+        if state.wd5555 {
             runCmd("IP=$(cat ~/.phone_wifi_ip 2>/dev/null); IP=${IP:-192.168.1.202}; \(adb) disconnect \"$IP:5555\" >/dev/null 2>&1; echo done") { _, _ in }
         } else {
-            runCmd("IP=$(cat ~/.phone_wifi_ip 2>/dev/null); IP=${IP:-192.168.1.202}; nc -z -G1 \"$IP\" 5555 && \(adb) connect \"$IP:5555\" >/dev/null 2>&1; sleep 1; \(adb) devices | grep ':5555' | grep -wq device && echo OK") { _, out in
+            runCmd("IP=$(cat ~/.phone_wifi_ip 2>/dev/null); IP=${IP:-192.168.1.202}; nc -z -G1 \"$IP\" 5555 && \(adb) connect \"$IP:5555\" >/dev/null 2>&1; sleep 1; \(adb) devices | grep ':5555' | grep -wq device && echo OK") { [weak self] _, out in
+                guard let self = self else { return }
                 if out.contains("OK") { self.failed.remove("tcp5555") }
                 else { self.failed.insert("tcp5555"); self.alert("5555 unavailable", "adbd isn't listening on 5555 (it disappears after a phone reboot). Bring the phone up via USB or Wireless-debug first.") }
             }
         }
     }
+    // FIX #5: IP from ~/.phone_wifi_ip (no hardcode 192.168.1.202 in checkAll)
     @objc func checkAll() {
         sshReport("All channels status", """
-ADB=\(adb); IP=192.168.1.202
+ADB=\(adb); IP=$(cat ~/.phone_wifi_ip 2>/dev/null)
+if [ -z "$IP" ]; then echo "Phone IP unknown — connect once over USB to cache it."; IP="(unknown)"; fi
 echo "CHANNELS (can be used in parallel):"
 U=$("$ADB" devices -l 2>/dev/null | grep 'usb:' | awk '{print $1}')
 [ -n "$U" ] && echo "  🟢 USB (cable, adb) — $U  [files push/pull, commands]" || echo "  ⚪️ USB (cable) — none (cable/port)"
 WC=$("$ADB" devices 2>/dev/null | grep -E ':[0-9]+|_adb-tls' | grep -c device)
 [ "$WC" -gt 0 ] && echo "  🟢 Wi-Fi adb / Wireless-debug — $WC entr(y/ies)  [admin: scrcpy, pm, logcat]" || echo "  ⚪️ Wi-Fi adb / Wireless-debug — none"
-if nc -z -G2 "$IP" 8022 >/dev/null 2>&1; then echo "  🟢 Wi-Fi SSH (8022) — $IP  [files/streaming, no cable; NOT shown in adb apps]"; else echo "  ⚪️ Wi-Fi SSH (8022) — none"; fi
+if [ "$IP" != "(unknown)" ] && nc -z -G2 "$IP" 8022 >/dev/null 2>&1; then echo "  🟢 Wi-Fi SSH (8022) — $IP  [files/streaming, no cable; NOT shown in adb apps]"; else echo "  ⚪️ Wi-Fi SSH (8022) — none"; fi
 echo ""
 echo "FOLDERS in Finder (mount):"
 /sbin/mount | grep -q Phone-USB  && echo "  🟢 USB folder ~/Phone-USB"   || echo "  ⚪️ USB folder not mounted"

@@ -1,22 +1,25 @@
 #!/bin/bash
 # phone-unmount.sh <usb|wifi|all>
 # Размонтирует указанный канал (или оба при "all"):
-#   diskutil unmount force, pkill демона, adb forward --remove, rmdir точки,
+#   diskutil unmount force, pkill демона, adb forward --remove (только USB), rmdir точки,
 #   rm transport-файла.
 set -u
 
-ADB="$HOME/Library/Android/sdk/platform-tools/adb"
+# shellcheck source=config.sh
+source "$(cd "$(dirname "$0")" && pwd)/config.sh"
 
 unmount_one() {
   local T="$1"
-  local MNT LPORT
+  local MNT
 
   if [ "$T" = "usb" ]; then
     MNT="$HOME/Phone-USB"
-    LPORT=8022
+    # USB-форвард слушает на PHONE_SSH_PORT (8022) — снять его
+    USB_FWD_PORT="$PHONE_SSH_PORT"
   elif [ "$T" = "wifi" ]; then
     MNT="$HOME/Phone-WiFi"
-    LPORT=8023
+    # Wi-Fi идёт прямым SSH — adb forward не использовался, снимать нечего
+    USB_FWD_PORT=""
   else
     echo "Неизвестный транспорт: $T (usb|wifi|all)"
     return 1
@@ -30,11 +33,13 @@ unmount_one() {
 
   # размонтировать том
   if mount | grep -q " $MNT "; then
-    diskutil unmount force "$MNT" >/dev/null 2>&1 && echo "  unmount OK" || echo "  unmount: уже отключено"
+    _to 12 diskutil unmount force "$MNT" >/dev/null 2>&1 && echo "  unmount OK" || echo "  unmount: уже отключено"
   fi
 
-  # снять adb forward (best-effort — устройство может быть уже отключено)
-  "$ADB" forward --remove "tcp:${LPORT}" 2>/dev/null || true
+  # снять adb forward только для USB-канала (Wi-Fi форвардов нет)
+  if [ -n "$USB_FWD_PORT" ]; then
+    _to 8 "$ADB" forward --remove "tcp:${USB_FWD_PORT}" 2>/dev/null || true
+  fi
 
   # убрать точку маунта (rmdir — только если пуста)
   rmdir "$MNT" 2>/dev/null || true

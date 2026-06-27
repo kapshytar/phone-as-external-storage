@@ -5,18 +5,9 @@
 # Выход: 0 если хотя бы один смонтирован, 1 если ни одного.
 set -u
 
-ADB="$HOME/Library/Android/sdk/platform-tools/adb"
+# shellcheck source=config.sh
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-pick_usb()  { "$ADB" devices -l | awk '/ device / && /usb:/ {print $1}' | head -1; }
-pick_wifi() {
-  local ep ip
-  ip=$("$ADB" devices -l | awk '/ device / && !/usb:/ {print $1}' | grep ':' | head -1)
-  [ -n "$ip" ] && { echo "$ip"; return; }
-  ep=$("$ADB" mdns services 2>/dev/null | awk '/_adb-tls-connect._tcp/{print $NF; exit}')
-  [ -n "$ep" ] && "$ADB" connect "$ep" >/dev/null 2>&1
-  "$ADB" devices -l | awk '/ device / && !/usb:/ {print $1}' | grep ':' | head -1
-}
+source "$SCRIPTS_DIR/config.sh"
 
 USB_DEV=$(pick_usb)
 WIFI_DEV=$(pick_wifi)

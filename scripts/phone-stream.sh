@@ -9,11 +9,13 @@ REMOTE="$1"
 DIR=$(dirname "$REMOTE"); BASE=$(basename "$REMOTE")
 PORT="${STREAM_PORT:-8970}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ADB="$HOME/Library/Android/sdk/platform-tools/adb"
+
+# shellcheck source=config.sh
+source "$HERE/config.sh"
+
 PY="$HOME/PhoneAsExtStorage/ADBFileExplorer/venv/bin/python3"
-RCLONE="/usr/local/bin/rclone"
-KEY="$HOME/.ssh/id_ed25519_phone"
-SSHUSER="${PHONE_SSH_USER:-u0_a520}"
+SSHUSER="$PHONE_SSH_USER"
+KEY="$PHONE_SSH_KEY"
 
 open_player(){ url="$1"
   if [ -d /Applications/IINA.app ]; then open -a IINA "$url"
@@ -29,8 +31,15 @@ serve_rclone(){ # $1=host $2=port
   pkill -f "rclone serve http" 2>/dev/null; pkill -f "adb_stream.py" 2>/dev/null; sleep 0.3
   nohup "$RCLONE" serve http \
     ":sftp,host=$1,port=$2,user=$SSHUSER,key_file=$KEY,shell_type=none:$DIR" \
-    --addr "127.0.0.1:$PORT" --read-only --vfs-read-chunk-size 8M >/tmp/phone-stream.log 2>&1 & disown
-  sleep 2
+    --addr "127.0.0.1:$PORT" --read-only \
+    --vfs-read-chunk-size 8M --sftp-chunk-size 4M \
+    --buffer-size 128M --vfs-read-chunk-size-limit 128M \
+    >/tmp/phone-stream.log 2>&1 & disown
+  # poll вместо sleep 2 — ждём до 4с (40 × 100мс)
+  for i in $(seq 1 40); do
+    nc -z 127.0.0.1 "$PORT" 2>/dev/null && break
+    sleep 0.1
+  done
   ENC=$(/usr/bin/python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$BASE")
   URL="http://127.0.0.1:$PORT/$ENC"; echo "URL: $URL"; open_player "$URL"
 }
@@ -38,7 +47,7 @@ serve_rclone(){ # $1=host $2=port
 case "$KIND" in
   usb)
     # форвард на sshd телефона и стрим через rclone (быстрый seek, как у Wi-Fi)
-    "$ADB" -s "$TGT" forward tcp:8022 tcp:8022 >/dev/null 2>&1
+    _to 8 "$ADB" -s "$TGT" forward tcp:8022 tcp:8022 >/dev/null 2>&1
     serve_rclone 127.0.0.1 8022 ;;
   wifi-ssh)
     serve_rclone "${TGT%%:*}" "${TGT##*:}" ;;
@@ -46,7 +55,12 @@ case "$KIND" in
     # нет прямого SSH — fallback на adb_stream поверх adb-WD
     pkill -f "adb_stream.py" 2>/dev/null; sleep 0.3
     nohup "$PY" "$HOME/PhoneAsExtStorage/adb_stream.py" --port "$PORT" "$REMOTE" >/tmp/phone-stream.log 2>&1 & disown
-    sleep 2; URL="http://127.0.0.1:$PORT/"; echo "URL: $URL"; open_player "$URL" ;;
+    # poll вместо sleep 2
+    for i in $(seq 1 40); do
+      nc -z 127.0.0.1 "$PORT" 2>/dev/null && break
+      sleep 0.1
+    done
+    URL="http://127.0.0.1:$PORT/"; echo "URL: $URL"; open_player "$URL" ;;
   *)
-    echo "❌ Телефон недоступен (нет USB и Wi-Fi). Проверь, что он на зарядке/в сети, sshd запущен."; exit 1 ;;
+    echo "Телефон недоступен (нет USB и Wi-Fi). Проверь, что он на зарядке/в сети, sshd запущен."; exit 1 ;;
 esac

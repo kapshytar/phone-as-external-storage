@@ -5,16 +5,27 @@
 # USB" (это Windows-фича). Поэтому: caffeinate (нет idle/system sleep пока USB воткнут)
 # + трафик по линку каждые 5с (adb shell true) + авто-reconnect. Single-instance. Лог.
 set -u
-ADB="$HOME/Library/Android/sdk/platform-tools/adb"
+
+# shellcheck source=config.sh
+source "$(cd "$(dirname "$0")" && pwd)/config.sh"
+
 LOG="$HOME/PhoneAsExtStorage/phone-keepalive.log"
 LOCK="/tmp/phone-keepalive.lock"
 mkdir "$LOCK" 2>/dev/null || { echo "keepalive уже запущен"; exit 0; }
+
 log(){ echo "$(date '+%F %T') $*" >> "$LOG"; }
+
+# Ротация лога: если >5МБ → сдвинуть в .1
+if [ -f "$LOG" ] && [ "$(stat -f%z "$LOG" 2>/dev/null || echo 0)" -gt 5242880 ]; then
+  mv "$LOG" "${LOG}.1"
+fi
 
 CAFF_PID=""
 start_caff(){
   # уже жив?
   [ -n "$CAFF_PID" ] && kill -0 "$CAFF_PID" 2>/dev/null && return
+  # Убить предыдущих сирот-caffeinate (если keepalive был прерван ненормально)
+  pkill -f "caffeinate -ism" 2>/dev/null
   # -i нет idle-sleep, -s нет system-sleep (на адаптере), -m нет disk-sleep.
   # Дисплею спать можно (это не суспендит USB). Без sudo.
   caffeinate -ism >/dev/null 2>&1 &
@@ -26,37 +37,26 @@ stop_caff(){
 }
 trap 'stop_caff; rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 
-# хелпер: adb с таймаутом (без D-state-висяка). macOS без coreutils timeout.
-adb_to(){ # $1=сек, далее adb-аргументы
-  local t="$1"; shift
-  "$ADB" "$@" >/dev/null 2>&1 &
-  local p=$!
-  ( sleep "$t"; kill -9 "$p" 2>/dev/null ) 2>/dev/null & local w=$!
-  wait "$p" 2>/dev/null; local rc=$?
-  kill "$w" 2>/dev/null
-  return $rc
-}
-
 log "keepalive START (pid $$)"
 miss=0; gone=0
 while sleep 5; do
   # есть ли USB-устройство? (по маркеру usb: в devices -l)
-  usb_dev=$("$ADB" devices -l 2>/dev/null | awk '/ device .*usb:/{print $1; exit}')
+  usb_dev=$(_to 8 "$ADB" devices -l 2>/dev/null | awk '/ device .*usb:/{print $1; exit}')
   if [ -n "$usb_dev" ]; then
     gone=0
     start_caff                      # USB воткнут → не давать компу уснуть
-    if adb_to 8 -s "$usb_dev" shell true; then
+    if _to 8 "$ADB" -s "$usb_dev" shell true >/dev/null 2>&1; then
       miss=0
     else
       miss=$((miss+1)); log "ping fail #$miss ($usb_dev)"
-      [ "$miss" -ge 2 ] && { "$ADB" reconnect >/dev/null 2>&1; log "  adb reconnect"; miss=0; }
+      [ "$miss" -ge 2 ] && { _to 8 "$ADB" reconnect >/dev/null 2>&1; log "  adb reconnect"; miss=0; }
     fi
   else
     # USB нет. Подождём (вдруг моргнул) — через ~30с отпускаем сон.
     gone=$((gone+1))
     [ "$gone" -ge 6 ] && stop_caff
     # на всякий — поднять, если есть любое adb-устройство (Wi-Fi/WD), но без caffeinate
-    any=$("$ADB" devices 2>/dev/null | awk '$2=="device"{print $1; exit}')
-    [ -z "$any" ] && "$ADB" reconnect >/dev/null 2>&1
+    any=$(_to 8 "$ADB" devices 2>/dev/null | awk '$2=="device"{print $1; exit}')
+    [ -z "$any" ] && _to 8 "$ADB" reconnect >/dev/null 2>&1
   fi
 done
