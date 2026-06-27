@@ -153,6 +153,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lWD.toolTip = "АДМИНСКИЙ/сигнальный канал (adb по Wi-Fi): команды управления телефоном — pm, settings, scrcpy, logcat. НЕ для файлов (файлы по SSH). Тумблер включается на телефоне; удалённо включить нельзя, но если включён — подключаюсь сам и держу, не выключаю."
         menu.addItem(lWD)
         menu.addItem(item("  ⓘ Какой канал для чего", #selector(helpChannels), ""))
+        menu.addItem(item("  Проверить все каналы", #selector(checkAll), ""))
         menu.addItem(item("  Проверить SSH", #selector(checkSSH), ""))
         menu.addItem(item("  Перезапустить SSH на телефоне", #selector(restartSSH), ""))
         menu.addItem(.separator())
@@ -394,6 +395,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     : out)
             }
         }
+    }
+    @objc func checkAll() {
+        sshReport("Состояние всех каналов", """
+ADB=\(adb); IP=192.168.1.202
+echo "КАНАЛЫ (можно использовать параллельно):"
+U=$("$ADB" devices -l 2>/dev/null | grep 'usb:' | awk '{print $1}')
+[ -n "$U" ] && echo "  🟢 USB (кабель, adb) — $U  [файлы push/pull, команды]" || echo "  ⚪️ USB (кабель) — нет (кабель/порт)"
+WC=$("$ADB" devices 2>/dev/null | grep -E ':[0-9]+|_adb-tls' | grep -c device)
+[ "$WC" -gt 0 ] && echo "  🟢 Wi-Fi adb / Wireless-debug — $WC вход(а)  [админ: scrcpy, pm, logcat]" || echo "  ⚪️ Wi-Fi adb / Wireless-debug — нет"
+if nc -z -G2 "$IP" 8022 >/dev/null 2>&1; then echo "  🟢 Wi-Fi SSH (8022) — $IP  [файлы/стрим без кабеля; в adb-приложениях НЕ виден]"; else echo "  ⚪️ Wi-Fi SSH (8022) — нет"; fi
+echo ""
+echo "ПАПКИ в Finder (mount):"
+/sbin/mount | grep -q Phone-USB  && echo "  🟢 USB-папка ~/Phone-USB"   || echo "  ⚪️ USB-папка не смонтирована"
+/sbin/mount | grep -q Phone-WiFi && echo "  🟢 Wi-Fi-папка ~/Phone-WiFi (через SSH)" || echo "  ⚪️ Wi-Fi-папка не смонтирована"
+""")
     }
     @objc func checkSSH() {
         sshReport("Проверка SSH-канала", """
