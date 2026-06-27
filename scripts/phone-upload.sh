@@ -29,9 +29,9 @@ for src in "$@"; do
   echo "→ $(basename "$src")"
   "$RCLONE" copy "$src" "$DST" \
     --transfers 8 --multi-thread-streams 4 --multi-thread-cutoff 50M \
-    --sftp-chunk-size 4M --sftp-concurrency 64 --no-checksum \
+    --sftp-chunk-size 4M --sftp-concurrency 64 --ignore-checksum \
     --stats 2s --stats-one-line 2>&1 | tail -3
-  rc=$?; [ "$rc" -ne 0 ] && RC=$rc
+  rc=${PIPESTATUS[0]}; [ "$rc" -ne 0 ] && RC=$rc
 done
 [ "$RC" -eq 0 ] && echo "✅ Готово → $DEST_DIR" || echo "⚠️ Завершено с ошибками (код $RC)"
 exit "$RC"
