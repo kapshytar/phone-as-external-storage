@@ -1,134 +1,94 @@
 #!/bin/bash
 # phone-mount.sh <usb|wifi>
-# Монтирует один канал (USB или Wi-Fi) в независимую точку маунта.
-# USB  → ~/Phone-USB,  порт 8022, volname "Phone USB"
-# Wi-Fi → ~/Phone-WiFi, порт 8023, volname "Phone WiFi"
+# Монтирует один канал в независимую точку.
+#   USB  → ~/Phone-USB   : adb forward tcp:8022→sshd(8022), host=127.0.0.1
+#   Wi-Fi → ~/Phone-WiFi : ПРЯМОЙ SSH на IP телефона:8022 (БЕЗ adb, БЕЗ Wireless Debugging)
 # Идемпотентно: если уже смонтировано и ls работает — exit 0.
 set -u
 
 ADB="$HOME/Library/Android/sdk/platform-tools/adb"
 RCLONE=/usr/local/bin/rclone
+KEY="$HOME/.ssh/id_ed25519_phone"
+IPCACHE="$HOME/.phone_wifi_ip"
 
-# ---- получить user из rclone config, fallback u0_a520 ----
 PUSER=$("$RCLONE" config show phone 2>/dev/null | awk '/^\s*user\s*=/{print $3; exit}')
 PUSER="${PUSER:-u0_a520}"
 
-# ---- разобрать аргумент ----
 T="${1:-}"
-if [ "$T" != "usb" ] && [ "$T" != "wifi" ]; then
-  echo "Использование: $0 <usb|wifi>"
-  exit 1
-fi
+[ "$T" = "usb" ] || [ "$T" = "wifi" ] || { echo "Использование: $0 <usb|wifi>"; exit 1; }
 
-# ---- per-transport переменные ----
-# USB = устройство с маркером usb: в `adb devices -l` (надёжно, не путает с mdns-именем)
-pick_usb()  { "$ADB" devices -l | awk '/ device / && /usb:/ {print $1}' | head -1; }
-# Wi-Fi = чистый ip:port handle (mdns-имя содержит пробел и обрезается — его не берём)
-pick_wifi() {
-  local ep ip
-  ip=$("$ADB" devices -l | awk '/ device / && !/usb:/ {print $1}' | grep ':' | head -1)
-  [ -n "$ip" ] && { echo "$ip"; return; }
-  ep=$("$ADB" mdns services 2>/dev/null | awk '/_adb-tls-connect._tcp/{print $NF; exit}')
-  [ -n "$ep" ] && "$ADB" connect "$ep" >/dev/null 2>&1
-  "$ADB" devices -l | awk '/ device / && !/usb:/ {print $1}' | grep ':' | head -1
-}
+pick_usb() { "$ADB" devices -l | awk '/ device / && /usb:/ {print $1}' | head -1; }
 
+# ---- определить канал: HOST/PORT/точка ----
 if [ "$T" = "usb" ]; then
-  LPORT=8022
-  MNT="$HOME/Phone-USB"
-  VOL="Phone USB"
-  LABEL="USB"
+  MNT="$HOME/Phone-USB"; LABEL="USB"; HOST="127.0.0.1"; RPORT=8022
   DEV=$(pick_usb)
 else
-  LPORT=8023
-  MNT="$HOME/Phone-WiFi"
-  VOL="Phone WiFi"
-  LABEL="Wi-Fi"
-  DEV=$(pick_wifi)
+  MNT="$HOME/Phone-WiFi"; LABEL="Wi-Fi"; RPORT=8022
+  # IP из кэша (пишется keepalive/transport, пока телефон на USB); fallback — спросить adb
+  HOST=$(cat "$IPCACHE" 2>/dev/null | tr -d '\r')
+  if [ -z "$HOST" ]; then
+    u=$(pick_usb); [ -n "$u" ] && HOST=$("$ADB" -s "$u" shell "ip -f inet addr show wlan0 2>/dev/null" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | tr -d '\r' | head -1)
+    [ -n "$HOST" ] && echo "$HOST" > "$IPCACHE"
+  fi
 fi
 
-# ---- per-transport атомарный lock (защита от гонки повторных вызовов) ----
+# ---- атомарный lock ----
 LOCK="/tmp/phonestream.${T}.lock"
-if ! mkdir "$LOCK" 2>/dev/null; then
-  echo "Операция монтирования $LABEL уже идёт — подожди."
-  exit 0
-fi
+mkdir "$LOCK" 2>/dev/null || { echo "Монтирование $LABEL уже идёт — подожди."; exit 0; }
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 
-# ---- уже смонтировано и живо? ----
+# ---- уже смонтировано? ----
 if mount | grep -q " $MNT " && ls "$MNT" >/dev/null 2>&1; then
-  echo "Уже смонтировано: $MNT"
-  exit 0
+  echo "Уже смонтировано: $MNT"; exit 0
 fi
 
-# ---- нет устройства? ----
-if [ -z "$DEV" ]; then
-  echo "Нет adb-устройства для $LABEL. Включи телефон / Wireless debugging."
-  exit 1
+# ---- подготовка канала ----
+if [ "$T" = "usb" ]; then
+  [ -n "$DEV" ] || { echo "Нет USB-устройства. Воткни кабель / включи USB-debugging."; exit 1; }
+  echo "USB-устройство: $DEV"
+  "$ADB" -s "$DEV" shell "settings put global wifi_sleep_policy 2; dumpsys deviceidle disable" >/dev/null 2>&1
+  "$ADB" -s "$DEV" forward "tcp:${RPORT}" tcp:8022 >/dev/null 2>&1
+  MODEL=$("$ADB" -s "$DEV" shell getprop ro.product.model 2>/dev/null | tr -d '\r')
+else
+  [ -n "$HOST" ] || { echo "Не знаю IP телефона. Подключи раз по USB (закэширую IP) или впиши в $IPCACHE."; exit 1; }
+  echo "Wi-Fi прямой SSH: $HOST:$RPORT (Wireless Debugging НЕ нужен)"
+  ping -c1 -t2 "$HOST" >/dev/null 2>&1 || { echo "Телефон $HOST не пингуется (не в сети / спит)."; exit 1; }
+  MODEL=$(ssh -i "$KEY" -p "$RPORT" -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$PUSER@$HOST" "getprop ro.product.model" 2>/dev/null | tr -d '\r')
 fi
-echo "adb-устройство ($LABEL): $DEV"
+VOL="${MODEL:+$MODEL ($LABEL)}"; VOL="${VOL:-Phone $LABEL}"
 
-# имя тома = модель телефона + канал (видно в Finder: напр. "SM-G975F (USB)")
-MODEL=$("$ADB" -s "$DEV" shell getprop ro.product.model 2>/dev/null | tr -d '\r')
-[ -n "$MODEL" ] && VOL="$MODEL ($LABEL)"
-
-# ---- снять power-save (best-effort, экран НЕ будим) ----
-"$ADB" -s "$DEV" shell "settings put global wifi_sleep_policy 2; dumpsys deviceidle disable" >/dev/null 2>&1
-
-# ---- убить ТОЛЬКО демона этой точки + размонтировать ----
-pkill -f "rclone mount.*$MNT" 2>/dev/null
-sleep 0.5
-if mount | grep -q " $MNT "; then
-  diskutil unmount force "$MNT" >/dev/null 2>&1
-fi
-rmdir "$MNT" 2>/dev/null   # НЕ rm -rf — точка маунта, не данные
+# ---- очистить старую точку ----
+pkill -f "rclone mount.*$MNT" 2>/dev/null; sleep 0.5
+mount | grep -q " $MNT " && diskutil unmount force "$MNT" >/dev/null 2>&1
+rmdir "$MNT" 2>/dev/null   # НЕ rm -rf — это точка маунта, не данные
 mkdir -p "$MNT"
 
-# ---- проброс порта: USB tcp:8022→8022; Wi-Fi tcp:8023→8022 ----
-"$ADB" -s "$DEV" forward "tcp:${LPORT}" tcp:8022 >/dev/null 2>&1
-
-# ---- real SSH-probe через rclone connection string (таймаут 6с) ----
-CONN=":sftp,host=127.0.0.1,port=${LPORT},user=${PUSER},key_file=${HOME}/.ssh/id_ed25519_phone:"
+# ---- SSH-probe (таймаут 6с) ----
+CONN=":sftp,host=${HOST},port=${RPORT},user=${PUSER},key_file=${KEY},shell_type=none:"
 if ! "$RCLONE" lsd "$CONN" --timeout 6s --contimeout 6s --low-level-retries 1 >/dev/null 2>&1; then
-  echo "sshd на телефоне не запущен или недоступен по $LABEL."
-  echo "Запусти его: на телефоне тапни виджет «Start-SSHD» (Termux:Widget)"
-  echo "или открой Termux и выполни ./sshd-on.sh — затем нажми Mount снова."
+  echo "sshd на телефоне недоступен по $LABEL ($HOST:$RPORT)."
+  echo "Запусти sshd: виджет «Start-SSHD» (Termux:Widget) или ./sshd-on.sh в Termux, затем Mount снова."
   exit 2
 fi
 
-# ---- монтирование через rclone connection string ----
+# ---- монтирование ----
 LOG="/tmp/rclone_${T}.log"
 "$RCLONE" mount \
-  ":sftp,host=127.0.0.1,port=${LPORT},user=${PUSER},key_file=${HOME}/.ssh/id_ed25519_phone:storage/shared" \
+  ":sftp,host=${HOST},port=${RPORT},user=${PUSER},key_file=${KEY},shell_type=none:storage/shared" \
   "$MNT" \
-  --vfs-cache-mode writes \
-  --vfs-read-chunk-streams 8 \
-  --vfs-read-chunk-size 8M \
-  --dir-cache-time 24h \
-  --attr-timeout 1m \
-  --no-checksum \
-  --vfs-fast-fingerprint \
-  --sftp-concurrency 64 \
-  --sftp-skip-links \
-  --poll-interval 0 \
-  --network-mode \
-  --noappledouble \
-  --noapplexattr \
-  --volname "$VOL" \
-  --no-modtime \
-  --daemon \
-  --log-file "$LOG" \
-  --log-level INFO
+  --vfs-cache-mode writes --vfs-read-chunk-streams 8 --vfs-read-chunk-size 8M \
+  --dir-cache-time 24h --attr-timeout 1m --no-checksum --vfs-fast-fingerprint \
+  --daemon-timeout 15s --sftp-concurrency 64 --sftp-skip-links --poll-interval 0 \
+  --network-mode --noappledouble --noapplexattr --volname "$VOL" --no-modtime \
+  --daemon --log-file "$LOG" --log-level INFO
 
-# ---- дождаться появления маунта (до ~10с) ----
+# ---- дождаться маунта ----
 for i in $(seq 1 10); do
   sleep 1
   if mount | grep -q " $MNT "; then
     echo "$LABEL" > "/tmp/phonestream.${T}.transport"
-    echo "Смонтировано ($LABEL) → $MNT  [volname: $VOL]"
-    exit 0
+    echo "Смонтировано ($LABEL) → $MNT  [volname: $VOL]"; exit 0
   fi
 done
-echo "Не удалось смонтировать $LABEL. Лог:"
-tail -6 "$LOG"
-exit 1
+echo "Не удалось смонтировать $LABEL. Лог:"; tail -6 "$LOG"; exit 1

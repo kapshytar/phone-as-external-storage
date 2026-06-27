@@ -60,8 +60,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     func wifiAvailable() -> Bool {
-        !sh("\(adb) devices | awk '/\\tdevice$/{print $1}' | grep -E ':|_adb-tls'")
-            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // Wi-Fi = ПРЯМОЙ SSH-канал (не Wireless Debugging!). Пинг кэш-IP + открытый sshd:8022.
+        // Так Wi-Fi доступен без включения Wireless Debugging на телефоне.
+        sh("IP=$(cat ~/.phone_wifi_ip 2>/dev/null); [ -n \"$IP\" ] && ping -c1 -t1 \"$IP\" >/dev/null 2>&1 && nc -z -G2 \"$IP\" 8022 >/dev/null 2>&1 && echo y")
+            .contains("y")
     }
     func phoneModel() -> String {
         let dev = sh("\(adb) devices | awk '/\\tdevice$/{print $1}' | head -1")
@@ -72,8 +74,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     // имя секции по конкретному устройству канала: "SM-G975F (USB)" / "SM-G975F (Wi-Fi)"
     func transportLabel(_ wifi: Bool, _ chan: String) -> String {
-        let pat = wifi ? "grep -E ':|_adb-tls'" : "grep -v _adb-tls | grep -v ':'"
-        let dev = sh("\(adb) devices | awk '/\\tdevice$/{print $1}' | \(pat) | head -1")
+        // Wi-Fi идёт по прямому SSH (adb-устройства может не быть) → берём модель с любого источника.
+        if wifi {
+            let m = phoneModel()
+            return m.isEmpty ? "\(chan) volume" : "\(m) (\(chan))"
+        }
+        let dev = sh("\(adb) devices | awk '/\\tdevice$/{print $1}' | grep -v _adb-tls | grep -v ':' | head -1")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if dev.isEmpty { return "\(chan) volume" }
         let m = sh("\(adb) -s \(dev) shell getprop ro.product.model")
