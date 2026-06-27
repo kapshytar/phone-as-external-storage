@@ -12,6 +12,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var mountScript:    String { (Bundle.main.resourcePath ?? "") + "/phone-mount.sh" }
     var unmountScript:  String { (Bundle.main.resourcePath ?? "") + "/phone-unmount.sh" }
     var mountAllScript: String { (Bundle.main.resourcePath ?? "") + "/phone-mount-all.sh" }
+    var rediscoverScript: String { (Bundle.main.resourcePath ?? "") + "/phone-rediscover.sh" }
 
     // ---- точки маунта ----
     let mntUSB  = NSString(string: "~/Phone-USB").expandingTildeInPath
@@ -195,10 +196,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     @objc func reconnect() {
-        // НЕ трогаем уже рабочие тома — только поднимаем то, что упало (идемпотентно).
-        // Для конкретного канала используй Mount/Unmount в его секции (USB или Wi-Fi).
-        run(mountAllScript) { code, out in
-            if code != 0 { self.alert("Reconnect failed", out) }
+        // Rediscover: пересканировать mDNS, переподхватить Wi-Fi, поднять упавшее (рабочее не трогаем).
+        run(rediscoverScript) { code, out in
+            if code != 0 { self.alert("Rediscover failed", out) }
         }
     }
 

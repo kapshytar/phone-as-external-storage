@@ -100,7 +100,10 @@ LOG="/tmp/rclone_${T}.log"
   --vfs-cache-mode writes \
   --vfs-read-chunk-streams 8 \
   --vfs-read-chunk-size 8M \
-  --dir-cache-time 12h \
+  --dir-cache-time 24h \
+  --attr-timeout 1m \
+  --no-checksum \
+  --vfs-fast-fingerprint \
   --volname "$VOL" \
   --no-modtime \
   --daemon \
