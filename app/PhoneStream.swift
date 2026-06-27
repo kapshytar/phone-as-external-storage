@@ -169,10 +169,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let t = Process()
             t.launchPath = "/bin/bash"
             t.arguments = [scriptPath] + extraArgs
-            let pipe = Pipe()
-            t.standardOutput = pipe; t.standardError = pipe
+            // ВАЖНО: вывод в temp-файл, НЕ в Pipe. Демонизированный rclone наследует fd
+            // и держит pipe открытым → readDataToEndOfFile() висит вечно (busy не снимался,
+            // трей застревал на "Working…"). Обычный файл читается до EOF сразу. stdin→/dev/null.
+            let tmp = NSTemporaryDirectory() + "phonestream-\(UUID().uuidString).log"
+            FileManager.default.createFile(atPath: tmp, contents: nil)
+            let fh = FileHandle(forWritingAtPath: tmp)
+            t.standardOutput = fh
+            t.standardError = fh
+            t.standardInput = FileHandle.nullDevice
             t.launch(); t.waitUntilExit()
-            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            try? fh?.close()
+            let out = (try? String(contentsOfFile: tmp, encoding: .utf8)) ?? ""
+            try? FileManager.default.removeItem(atPath: tmp)
             DispatchQueue.main.async { self.busy = false; done(t.terminationStatus, out) }
         }
     }
