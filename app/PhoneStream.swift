@@ -37,8 +37,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     func wifiAvailable() -> Bool {
-        !sh("\(adb) mdns services 2>/dev/null | grep _adb-tls-connect")
+        // стабильно: есть ли подключённое Wi-Fi adb-устройство (ip:port или _adb-tls), а не мигающий mDNS
+        !sh("\(adb) devices | awk '/\\tdevice$/{print $1}' | grep -E ':|_adb-tls'")
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    func activeTransport() -> String {
+        (try? String(contentsOfFile: "/tmp/phonestream.transport", encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     // ---- menu ----
@@ -69,9 +74,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         let hdr = NSMenuItem(title: "Transport:", action: nil, keyEquivalent: ""); hdr.isEnabled = false
         menu.addItem(hdr)
-        addTransport(menu, "Auto", "auto", true)
-        addTransport(menu, "Wi-Fi", "wifi", wifi)
-        addTransport(menu, "USB (turbo)", "usb", usb)
+        // галочка = реально активный канал (когда смонтировано), иначе сохранённое предпочтение
+        let active = mounted ? activeTransport() : ""   // "USB" / "Wi-Fi"
+        addTransport(menu, "Auto", "auto", true, !mounted && transport == "auto")
+        addTransport(menu, "Wi-Fi", "wifi", wifi, active == "Wi-Fi")
+        addTransport(menu, "USB (turbo)", "usb", usb, active == "USB")
         menu.addItem(.separator())
         menu.addItem(item("Reconnect", #selector(reconnect), "r"))
         menu.addItem(item("Screen mirror", #selector(mirror), ""))
@@ -79,11 +86,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(item("Quit", #selector(quit), "q"))
     }
-    func addTransport(_ menu: NSMenu, _ title: String, _ key: String, _ available: Bool) {
+    func addTransport(_ menu: NSMenu, _ title: String, _ key: String, _ available: Bool, _ checked: Bool) {
         let i = NSMenuItem(title: title + (available ? "" : "  (unavailable)"),
                            action: #selector(selectTransport(_:)), keyEquivalent: "")
         i.target = self; i.representedObject = key
-        i.state = (transport == key) ? .on : .off
+        i.state = checked ? .on : .off
         i.isEnabled = available
         menu.addItem(i)
     }
