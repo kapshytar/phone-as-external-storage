@@ -65,6 +65,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         sh("IP=$(cat ~/.phone_wifi_ip 2>/dev/null); [ -n \"$IP\" ] && ping -c1 -t1 \"$IP\" >/dev/null 2>&1 && nc -z -G2 \"$IP\" 8022 >/dev/null 2>&1 && echo y")
             .contains("y")
     }
+    // статусы трёх каналов для прозрачного отображения
+    func usbAdbOn() -> Bool { usbAvailable() }      // adb по USB (кабель)
+    func wifiSshOn() -> Bool { wifiAvailable() }    // прямой SSH по Wi-Fi
+    func wirelessDebugOn() -> Bool {                 // adb по Wi-Fi (Wireless Debugging, mDNS)
+        !sh("\(adb) mdns services 2>/dev/null | grep -i _adb-tls-connect")
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
     func phoneModel() -> String {
         let dev = sh("\(adb) devices | awk '/\\tdevice$/{print $1}' | head -1")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -118,8 +125,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(st)
         menu.addItem(.separator())
 
-        // ---- основная кнопка: открыть быстрый браузер телефона (adb-листинг, не Finder) ----
-        menu.addItem(item("Open Phone Browser", #selector(openBrowser), "b"))
+        // ---- ЦЕНТР ПОДКЛЮЧЕНИЯ: прозрачный статус трёх каналов ----
+        let chHdr = NSMenuItem(title: "Каналы связи", action: nil, keyEquivalent: ""); chHdr.isEnabled = false
+        menu.addItem(chHdr)
+        let lUSB = NSMenuItem(title: "  \(usbAdbOn() ? "🟢" : "⚪️") USB (кабель) — перенос/команды", action: nil, keyEquivalent: ""); lUSB.isEnabled = false; menu.addItem(lUSB)
+        let lSSH = NSMenuItem(title: "  \(wifiSshOn() ? "🟢" : "⚪️") Wi-Fi (SSH) — браузинг/стрим/перенос", action: nil, keyEquivalent: ""); lSSH.isEnabled = false; menu.addItem(lSSH)
+        let lWD  = NSMenuItem(title: "  \(wirelessDebugOn() ? "🟢" : "⚪️") Wireless-debug — не нужен", action: nil, keyEquivalent: ""); lWD.isEnabled = false; menu.addItem(lWD)
+        menu.addItem(item("  ⓘ Какой канал для чего", #selector(helpChannels), ""))
+        menu.addItem(item("  Проверить SSH", #selector(checkSSH), ""))
+        menu.addItem(item("  Перезапустить SSH на телефоне", #selector(restartSSH), ""))
+        menu.addItem(.separator())
+
+        // ---- файловые браузеры ----
+        menu.addItem(item("Открыть FileDroid", #selector(openBrowser), "b"))
+        menu.addItem(item("Открыть ADB Explorer", #selector(openAdbExplorer), ""))
         menu.addItem(.separator())
 
         // ---- секция USB volume ----
@@ -293,6 +312,62 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.alert(code == 0 ? "Cache cleared" : "Failed",
                        code == 0 ? "App caches cleared on the phone." : out)
         }
+    }
+
+    // ---- открыть наш Python-браузер ADBFileExplorer ----
+    @objc func openAdbExplorer() {
+        let runsh = NSHomeDirectory() + "/PhoneAsExtStorage/ADBFileExplorer/run.sh"
+        if FileManager.default.fileExists(atPath: runsh) {
+            let t = Process(); t.launchPath = "/bin/bash"
+            t.arguments = ["-lc", "cd \"$(dirname \(runsh))\" && nohup bash run.sh >/tmp/adbfe.log 2>&1 &"]
+            try? t.run()
+        } else {
+            alert("ADB Explorer не найден", "Ожидал ~/PhoneAsExtStorage/ADBFileExplorer/run.sh")
+        }
+    }
+
+    // ---- онбординг: какой канал для чего ----
+    @objc func helpChannels() {
+        alert("Каналы связи — что для чего",
+"""
+🟢/⚪️ USB (кабель): телефон по проводу (adb). Самый стабильный. Нужен для команд под shell-uid (чистка кэша, scrcpy-зеркало) и быстрых push/pull. «Mount USB» монтирует папку телефона.
+
+🟢/⚪️ Wi-Fi (SSH): прямой SSH на телефон (порт 8022). Wireless Debugging НЕ требуется. Браузинг, стрим видео в IINA (без выкачки), перенос ~25 МБ/с. ГЛАВНЫЙ канал для шкафа-сервера. «Mount Wi-Fi» монтирует по нему.
+
+⚪️ Wireless-debug: adb по Wi-Fi. Нестабилен (динамический порт, тумблер сам гаснет, удалённо не включить). НЕ используем — SSH лучше во всём.
+
+Правило: кабель воткнут → USB. Без кабеля → Wi-Fi (SSH). Стрим видео — через файловый браузер (открывается в IINA).
+""")
+    }
+
+    // ---- SSH-отчёт в фоне (не вешает UI) ----
+    func sshReport(_ title: String, _ cmd: String) {
+        busy = true
+        DispatchQueue.global().async {
+            let out = self.sh(cmd).trimmingCharacters(in: .whitespacesAndNewlines)
+            DispatchQueue.main.async {
+                self.busy = false
+                self.alert(title, out.isEmpty
+                    ? "Нет ответа от телефона по SSH.\nЕсли sshd упал полностью — запусти на телефоне виджет «Start-SSHD» (Termux:Widget) или перезагрузи телефон (Termux:Boot поднимет sshd сам)."
+                    : out)
+            }
+        }
+    }
+    @objc func checkSSH() {
+        sshReport("Проверка SSH-канала", """
+IP=$(cat ~/.phone_wifi_ip 2>/dev/null); KEY=$HOME/.ssh/id_ed25519_phone
+echo "IP телефона: ${IP:-неизвестен (подключи раз по USB)}"
+[ -n "$IP" ] && { ping -c1 -t2 "$IP" >/dev/null 2>&1 && echo "ping: OK" || echo "ping: FAIL (телефон не в сети)"; }
+[ -n "$IP" ] && { nc -z -G2 "$IP" 8022 >/dev/null 2>&1 && echo "sshd:8022: открыт" || echo "sshd:8022: закрыт"; }
+[ -n "$IP" ] && ssh -i "$KEY" -p 8022 -o StrictHostKeyChecking=no -o ConnectTimeout=5 u0_a520@"$IP" "echo 'SSH-вход: OK'; echo -n 'модель: '; getprop ro.product.model" 2>/dev/null
+""")
+    }
+    @objc func restartSSH() {
+        sshReport("Перезапуск SSH на телефоне", """
+IP=$(cat ~/.phone_wifi_ip 2>/dev/null); KEY=$HOME/.ssh/id_ed25519_phone
+[ -z "$IP" ] && { echo "Не знаю IP телефона. Подключи раз по USB — закэширую."; exit 0; }
+ssh -i "$KEY" -p 8022 -o StrictHostKeyChecking=no -o ConnectTimeout=6 u0_a520@"$IP" 'pgrep -x sshd >/dev/null || sshd; nohup sh ~/sshd-watchdog.sh >/dev/null 2>&1 & sleep 1; echo "sshd pid: $(pgrep -x sshd | tr "\\n" " ")"; echo "watchdog: запущен"' 2>/dev/null
+""")
     }
 
     @objc func quit() { stopKeepalive(); NSApp.terminate(nil) }
