@@ -112,14 +112,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let usbA  = usbAvailable()
         let wifiA = wifiAvailable()
 
-        // ---- статус-строка ----
-        var parts: [String] = []
-        if usbM  { parts.append("USB") }
-        if wifiM { parts.append("Wi-Fi") }
+        // ---- статус-строка: точка = НА СВЯЗИ (любой канал), а не «смонтировано» ----
         let model = phoneModel()
-        let statusTitle = parts.isEmpty
-            ? (model.isEmpty ? "○ Not connected" : "○ \(model) (not mounted)")
-            : "● \(model.isEmpty ? "" : "\(model) — ")\(parts.joined(separator: " + "))"
+        let reach = usbAdbOn() || wifiSshOn()
+        var mounted: [String] = []
+        if usbM  { mounted.append("USB") }
+        if wifiM { mounted.append("Wi-Fi") }
+        let mountedStr = mounted.isEmpty ? "папки не смонтированы" : "папки: " + mounted.joined(separator: "+")
+        let statusTitle = "\(reach ? "●" : "○") \(model.isEmpty ? (reach ? "На связи" : "Телефон не найден") : model) — \(mountedStr)"
         let st = NSMenuItem(title: statusTitle, action: nil, keyEquivalent: "")
         st.isEnabled = false
         menu.addItem(st)
