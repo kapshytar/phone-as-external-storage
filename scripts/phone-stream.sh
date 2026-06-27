@@ -23,23 +23,30 @@ open_player(){ url="$1"
 T=$(bash "$HERE/phone-transport.sh"); KIND="${T%%|*}"; TGT="${T#*|}"
 echo "транспорт: $KIND ($TGT)"
 
+# общий запуск rclone serve http поверх SFTP (быстрый seek: одно соединение,
+# без порождения процесса на каждый range → IINA стартует быстро даже на mp4 с moov в конце)
+serve_rclone(){ # $1=host $2=port
+  pkill -f "rclone serve http" 2>/dev/null; pkill -f "adb_stream.py" 2>/dev/null; sleep 0.3
+  nohup "$RCLONE" serve http \
+    ":sftp,host=$1,port=$2,user=$SSHUSER,key_file=$KEY,shell_type=none:$DIR" \
+    --addr "127.0.0.1:$PORT" --read-only --vfs-read-chunk-size 8M >/tmp/phone-stream.log 2>&1 & disown
+  sleep 2
+  ENC=$(/usr/bin/python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$BASE")
+  URL="http://127.0.0.1:$PORT/$ENC"; echo "URL: $URL"; open_player "$URL"
+}
+
 case "$KIND" in
-  usb|wifi-adb)
+  usb)
+    # форвард на sshd телефона и стрим через rclone (быстрый seek, как у Wi-Fi)
+    "$ADB" -s "$TGT" forward tcp:8022 tcp:8022 >/dev/null 2>&1
+    serve_rclone 127.0.0.1 8022 ;;
+  wifi-ssh)
+    serve_rclone "${TGT%%:*}" "${TGT##*:}" ;;
+  wifi-adb)
+    # нет прямого SSH — fallback на adb_stream поверх adb-WD
     pkill -f "adb_stream.py" 2>/dev/null; sleep 0.3
     nohup "$PY" "$HOME/PhoneAsExtStorage/adb_stream.py" --port "$PORT" "$REMOTE" >/tmp/phone-stream.log 2>&1 & disown
-    sleep 2
-    URL="http://127.0.0.1:$PORT/"
-    echo "URL: $URL"; open_player "$URL" ;;
-  wifi-ssh)
-    IP="${TGT%%:*}"; SP="${TGT##*:}"
-    pkill -f "rclone serve http" 2>/dev/null; sleep 0.3
-    nohup "$RCLONE" serve http \
-      ":sftp,host=$IP,port=$SP,user=$SSHUSER,key_file=$KEY,shell_type=none:$DIR" \
-      --addr "127.0.0.1:$PORT" --read-only >/tmp/phone-stream.log 2>&1 & disown
-    sleep 2
-    ENC=$(/usr/bin/python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$BASE")
-    URL="http://127.0.0.1:$PORT/$ENC"
-    echo "URL: $URL"; open_player "$URL" ;;
+    sleep 2; URL="http://127.0.0.1:$PORT/"; echo "URL: $URL"; open_player "$URL" ;;
   *)
     echo "❌ Телефон недоступен (нет USB и Wi-Fi). Проверь, что он на зарядке/в сети, sshd запущен."; exit 1 ;;
 esac
