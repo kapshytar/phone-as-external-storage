@@ -230,6 +230,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item("Open FileDroid", #selector(openBrowser), "b"))
         menu.addItem(item("Open ADB Explorer", #selector(openAdbExplorer), ""))
         menu.addItem(item("⬇︎ Download from internet to phone", #selector(downloadToPhone), ""))
+        menu.addItem(item("⬆︎ Upload to phone (fast, multi-stream)", #selector(uploadToPhone), ""))
         menu.addItem(.separator())
 
         // ---- USB volume ----
@@ -364,6 +365,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // ---- download from internet straight to phone (bypasses Mac disk) ----
     // FIX #4: URL scheme validation; accessoryView before initialFirstResponder; portable rclone path
+    // ---- fast multi-threaded upload to the phone (rclone copy over SFTP) ----
+    @objc func uploadToPhone() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Upload"
+        panel.message = "Select files/folders to upload to the phone (/sdcard/Download), multi-stream over the fastest channel."
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        let paths = panel.urls.map { $0.path }
+        let script = (Bundle.main.resourcePath ?? "") + "/phone-upload.sh"
+        guard FileManager.default.fileExists(atPath: script) else {
+            alert("Upload script missing", script); return
+        }
+        run(script, paths) { [weak self] _, out in
+            self?.alert("Upload to phone",
+                out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Done." : out)
+        }
+    }
+
     @objc func downloadToPhone() {
         let a = NSAlert()
         a.messageText = "Download from internet to phone"
