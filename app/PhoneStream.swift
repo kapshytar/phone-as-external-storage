@@ -240,14 +240,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         // ---- Wi-Fi volume ----
-        let wifiHdr = NSMenuItem(title: transportLabel(true, "Wi-Fi · SSH"), action: nil, keyEquivalent: "")
+        // ⚠ прямо в заголовке тома; подробности — при наведении (без отдельной строки)
+        let wifiHdr = NSMenuItem(title: "⚠︎ " + transportLabel(true, "Wi-Fi · SSH"), action: nil, keyEquivalent: "")
         wifiHdr.isEnabled = false
-        wifiHdr.toolTip = "This folder is mounted over Wi-Fi via SSH (NOT via Wireless-debug)."
+        wifiHdr.toolTip = "Mounted over Wi-Fi via SSH (NOT Wireless-debug). Finder over Wi-Fi is slow and can hang if the link drops (a watchdog force-unmounts). For viewing/streaming use a browser + IINA, not Finder."
         menu.addItem(wifiHdr)
-        let wifiWarn = NSMenuItem(title: "  ⚠︎ Finder over Wi-Fi is slow — use a browser/IINA/SSH to view", action: nil, keyEquivalent: "")
-        wifiWarn.isEnabled = false
-        wifiWarn.toolTip = "The Wi-Fi mount goes over SSH — more stable than Wireless-debug, but still FUSE-over-network: if Wi-Fi drops, Finder can hang (a watchdog force-unmounts). For viewing/streaming use a browser + IINA, not Finder."
-        menu.addItem(wifiWarn)
         if wifiM {
             menu.addItem(item("  Open Wi-Fi folder", #selector(openWiFi), ""))
             menu.addItem(item("  Unmount Wi-Fi", #selector(unmountWiFi), ""))
