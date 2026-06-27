@@ -12,6 +12,13 @@ if mount | grep -q " $MNT " && ls "$MNT" >/dev/null 2>&1; then
   exit 0
 fi
 
+# НЕ смонтировано корректно → подчистить зависшие rclone-демоны и битый маунт,
+# иначе повторные запуски плодят демонов (приводило к зависанию Finder).
+pkill -f "rclone mount phone:" 2>/dev/null
+sleep 1
+if mount | grep -q " $MNT "; then diskutil unmount force "$MNT" >/dev/null 2>&1; fi
+rm -rf "$MNT" 2>/dev/null
+
 # 1) выбрать adb-устройство.
 #    По умолчанию Wi-Fi-ПЕРВЫМ (стабильно для стоящего сервера на настенной зарядке;
 #    не зависит от питания/тока USB-порта Mac). USB — только если форсить (для турбо-передач):

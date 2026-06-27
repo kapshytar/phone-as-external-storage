@@ -1,11 +1,11 @@
-# ADB Turbo S/T — Stream Transfer
+# ADB Turbo S/T/M — Stream Transfer Mount
 
 > Mount your Android phone as a Finder volume on macOS, via ADB + rclone/SFTP. 100% free & open-source.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2011%2B-lightgrey?logo=apple)](https://github.com/kapshytar/phone-as-external-storage)
+[![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2011%2B-lightgrey?logo=apple)](https://github.com/kapshytar/adb-turbo-s-t-m)
 [![Built with rclone + macFUSE](https://img.shields.io/badge/Built%20with-rclone%20%2B%20macFUSE-orange)](https://rclone.org)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/kapshytar/phone-as-external-storage/pulls)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/kapshytar/adb-turbo-s-t-m/pulls)
 
 ---
 
@@ -71,8 +71,8 @@ This project mounts your Android phone as a real Finder volume with no-copy stre
 **Mac:**
 
 ```bash
-git clone https://github.com/kapshytar/phone-as-external-storage
-cd phone-as-external-storage
+git clone https://github.com/kapshytar/adb-turbo-s-t-m
+cd adb-turbo-s-t-m
 ./setup.sh
 ```
 
@@ -81,7 +81,7 @@ The wizard installs all dependencies (macFUSE, rclone official binary, ADB), con
 **Phone (Termux, one-liner):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kapshytar/phone-as-external-storage/main/scripts/termux-init.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kapshytar/adb-turbo-s-t-m/master/scripts/termux-init.sh | bash
 ```
 
 > Inspect the script before running: download it first with `curl -fsSL <url> -o termux-init.sh`, review it, then run `bash termux-init.sh`.
