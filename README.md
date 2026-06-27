@@ -248,6 +248,70 @@ After every phone reboot, sshd starts automatically. Combined with Dark Mode the
 
 Use USB for anything serious. Wi-Fi adds latency because Android's Wi-Fi chip aggressively power-saves between packets.
 
+## ✅ Compatibility / Requirements
+
+### Phone (Android)
+
+| Feature | Requirement | Notes |
+|---------|-------------|-------|
+| Termux (sshd, Stream Mode) | Android **7.0+** | Termux minimum requirement |
+| USB transport (adb forward) | Any Android with USB Debugging | Works on all brands |
+| Wi-Fi / Wireless Debugging (mDNS auto-discovery) | **Android 11+** recommended | On older Android: USB only, or legacy `adb tcpip` (not reliable) |
+| Samsung devices | Wi-Fi: Wireless Debugging only | Knox blocks legacy `adb tcpip 5555` → use Wireless Debugging or USB |
+| Termux:Boot (auto-start sshd) | Optional | Install from F-Droid |
+| Termux:Widget | Optional | Install from F-Droid |
+
+**Install Termux from [F-Droid](https://f-droid.org), not the Play Store** — the Play Store build is outdated.
+
+Tested on: **Samsung Galaxy S10+ (Android 12)**. Any Android brand works; Samsung-specific caveats are noted above.
+
+### Mac (macOS)
+
+| Component | Requirement | Notes |
+|-----------|-------------|-------|
+| macOS | **11 Big Sur+** | |
+| rclone binary (included) | Intel `osx-amd64` | Apple Silicon: swap to `osx-arm64` binary in `setup.sh` |
+| macFUSE | Requires kext approval + **reboot** | System Settings → Privacy & Security → allow → reboot |
+| macFUSE on Apple Silicon | Needs lowered security in Recovery for KEXT | Alternative: [FUSE-T](https://www.fuse-t.org) (no kext required) |
+
+---
+
+## 🛡️ Hardening & Longevity (for always-on server use)
+
+### rclone / VFS cache
+
+- **`--vfs-cache-mode writes`** (used by default) — enables full write-back caching; required for writes to work correctly. `minimal` mode does **not** support writes.
+- **`--vfs-cache-mode full`** — only needed if apps require random-seek access or in-place editing (e.g. SQLite databases). Has higher local disk usage.
+- **`--vfs-read-chunk-streams 8`** (currently set to 8) — sweet spot is 4–8 parallel streams. Higher values can saturate phone CPU or flash I/O without improving speed.
+
+### Security
+
+- **SSH over adb forward (recommended):** keep `sshd` bound to `127.0.0.1` — accessible only through `adb forward tcp:8022`, invisible to the network. No open port, no exposure.
+- **SSH over direct LAN/VPN access:** use a dedicated SSH key for mount only, set `PasswordAuthentication no`, restrict the user, and add `from=<LAN/VPN subnet>` in `~/.ssh/authorized_keys` on the phone.
+- **Wireless Debugging:** enable only on trusted (home/VPN) networks. Disable when not in use.
+
+### Android power & process management
+
+- In Android Settings: set **Battery → Termux → Unrestricted** and allow autostart for Termux and Termux:Boot. Without this, Android may kill the sshd process.
+- **Phantom process killer** (Android 12+): disable via `adb shell device_config put activity_manager max_phantom_processes 2147483647` — `phone-restrict.sh lift` does this automatically.
+- After a phone reboot: the screen must be unlocked once (credential-encrypted storage is locked at boot). Wireless Debugging may also reset → keep a USB cable as a recovery path.
+
+### Physical / hardware
+
+- For permanent charging: enable **battery charge limit at 80–85%** (Samsung: *Settings → Battery → Protect battery*). Continuous 100% charging degrades the battery and risks swelling.
+- Use a quality cable and ensure adequate ventilation around the phone.
+
+### Write durability
+
+- rclone write-back cache flushes after ~5 seconds. **Do not unplug the cable or put the Mac to sleep immediately after copying large files** — data may still be uploading to the phone.
+- A hung mount is recovered automatically: `phone-stream-up.sh` performs force-unmount + remount if needed.
+
+### Known limitation: concurrent edits
+
+SFTP has no push-notification protocol. If a file is modified from the phone while the FUSE mount is active, the Mac may not see the change immediately. Remount to force a refresh.
+
+---
+
 ## Known Gotchas
 
 - **adbfs copies to /tmp on open**: when any app opens a file via FUSE, adbfs pulls it to a local temp location. For true no-copy streaming (e.g. playing a video directly off phone) use Stream Mode (rclone/sftp)

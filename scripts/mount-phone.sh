@@ -3,20 +3,10 @@
 #   ./mount-phone.sh            -> внутренняя память в ~/Phone (+ внешняя SD в ~/Phone-SD, если есть)
 #   ./mount-phone.sh system     -> весь системный корень телефона в ~/Phone-System
 #   ./mount-phone.sh -s SERIAL  -> выбрать конкретный телефон
-#
-# ТРЕБУЕТ: macFUSE + adbfs binary в PATH или ~/PhoneAsExtStorage/adbfs-rootless/adbfs
 set -u
 
 ADB="$HOME/Library/Android/sdk/platform-tools/adb"
-# Искать adbfs: сначала в PATH, потом в стандартном месте
-if command -v adbfs >/dev/null 2>&1; then
-  ADBFS="$(command -v adbfs)"
-elif [ -x "$HOME/PhoneAsExtStorage/adbfs-rootless/adbfs" ]; then
-  ADBFS="$HOME/PhoneAsExtStorage/adbfs-rootless/adbfs"
-else
-  echo "adbfs не найден. Собери из https://github.com/spion/adbfs-rootless с patch/adbfs-root-env.patch"
-  exit 1
-fi
+ADBFS="$HOME/PhoneAsExtStorage/adbfs-rootless/adbfs"
 export PATH="$HOME/Library/Android/sdk/platform-tools:$PATH"
 
 MODE="internal"
@@ -42,8 +32,7 @@ export ANDROID_SERIAL="$SERIAL"
 echo "Устройство: $SERIAL"
 
 # снять ограничения телефона только на время работы
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-"$SCRIPT_DIR/phone-restrict.sh" lift >/dev/null 2>&1 || true
+"$HOME/PhoneAsExtStorage/adbfs-rootless/phone-restrict.sh" lift >/dev/null 2>&1 || true
 
 # смонтировать один том: $1=device-root ("" = система), $2=точка монтирования, $3=имя тома
 mount_one() {

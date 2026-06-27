@@ -5,7 +5,7 @@
 #   ./phone-restrict.sh restore   -> вернуть как было (или дефолты)
 set -u
 ADB="$HOME/Library/Android/sdk/platform-tools/adb"
-BK="$HOME/.phone_restrict_backup"
+BK="$HOME/PhoneAsExtStorage/adbfs-rootless/.phone_restrict_backup"
 
 SERIAL=$("$ADB" devices | awk '$2=="device"{print $1}' | grep -v ':' | head -1)
 [ -z "$SERIAL" ] && SERIAL=$("$ADB" devices | awk '$2=="device"{print $1}' | head -1)
@@ -23,7 +23,7 @@ case "${1:-}" in
         echo "maxph=$(S /system/bin/device_config get activity_manager max_phantom_processes | tr -d '\r')"
       } > "$BK"
     fi
-    S settings put global stay_on_while_plugged_in 3
+    # ВАЖНО: экран НЕ включаем (телефон-сервер должен оставаться тёмным).
     S settings put global wifi_sleep_policy 2
     S settings put global wifi_scan_throttle_enabled 0
     S dumpsys deviceidle disable >/dev/null 2>&1

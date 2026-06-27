@@ -35,7 +35,7 @@ fi
 if mount | grep -q " $MNT "; then diskutil unmount force "$MNT" >/dev/null 2>&1; fi
 rm -rf "$MNT"; mkdir -p "$MNT"
 "$RCLONE" mount phone:storage/shared "$MNT" \
-  --vfs-cache-mode minimal --vfs-read-chunk-streams 16 --vfs-read-chunk-size 8M \
+  --vfs-cache-mode writes --vfs-read-chunk-streams 8 --vfs-read-chunk-size 8M \
   --dir-cache-time 12h --volname Phone-Stream --no-modtime \
   --log-file /tmp/rclone_mount.log --log-level INFO --daemon
 for i in $(seq 1 10); do
