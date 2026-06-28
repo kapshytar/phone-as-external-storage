@@ -18,7 +18,7 @@ while IFS= read -r line; do
   echo "$line" | grep -qw 'device' || continue
   serial=$(echo "$line" | awk '{print $1}'); [ -z "$serial" ] && continue
   if echo "$line" | grep -q 'usb:'; then kind="USB"; else kind="Wi-Fi"; fi
-  model=$(_to 6 "$ADB" -s "$serial" shell getprop ro.product.model 2>/dev/null | tr -d '\r' | tr -d '\n')
+  model=$(_to 6 "$ADB" -s "$serial" shell getprop ro.product.model </dev/null 2>/dev/null | tr -d '\r' | tr -d '\n')
   [ -z "$model" ] && model="$serial"
   serials+=("$serial"); models+=("$model"); kinds+=("$kind")
 done < <("$ADB" devices -l 2>/dev/null)
