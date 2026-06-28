@@ -599,14 +599,10 @@ SPEED CHEAT-SHEET
         state.wd5555  = devs.contains { $0.model == model && $0.serial.contains(":5555") }
         state.wdMdns  = devs.contains { $0.model == model && $0.kind == "Wi-Fi" && !$0.serial.contains(":5555") }
         state.wifiSsh = state.wifiSshRaw && devs.contains { $0.model == model && $0.kind == "Wi-Fi" }
-        // галочки устройств + точки каналов обновляем ВЖИВУЮ (меню открыто)
-        for row in deviceRows { styleDeviceButton(row.button, row.display, row.model == model) }
-        refreshChannelItems()
-        // заголовки маунт-секций — модель live
-        for h in mountHeaders {
-            h.item.title = (h.kind == "USB") ? "\(model) (USB)" : "⚠︎ \(model) (Wi-Fi · SSH)"
-        }
-        // сохраняем выбор (модель) + фоновый рефреш для точности (каналы перерисуются при переоткрытии)
+        // ПЕРЕСТРАИВАЕМ ВСЁ меню под выбранное устройство вживую (каналы, маунт-секции,
+        // заголовки, галочка) — меню остаётся открытым, т.к. клик был по view-кнопке.
+        if let m = statusItem.menu { menuNeedsUpdate(m) }
+        // сохраняем выбор (модель) + фоновый рефреш для точности
         runCmd("printf '%s' \"$1\" > ~/.phone_active_model", [model]) { [weak self] _, _ in
             self?.scheduleBackgroundRefresh()
         }

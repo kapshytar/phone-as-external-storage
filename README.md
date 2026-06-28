@@ -20,6 +20,8 @@ Much of the device-side logic works around **Samsung/One UI specifics** (Knox, W
 
 This is a personal project shared as-is. **No support, no guarantees, no promise it works on your hardware.** If it's useful to you: fork it, adapt the hardcoded bits (phone UID, paths, IP via `~/.phone_wifi_ip`), and run with it. PRs welcome but not actively maintained for other devices.
 
+**Multi-device note:** the app supports multiple phones connected simultaneously. Device selection is stored by **model name** in `~/.phone_active_model` (not by serial — Wi-Fi serials are ephemeral). SSH operations (upload, download, streaming, Wi-Fi mount) route to the cached IP independently of the device selector; the selector governs adb-level operations (USB mount, scrcpy, cache clear).
+
 ---
 
 ## Why this exists
@@ -57,16 +59,33 @@ That's the actual reason to use this over a tap-to-start FTP app: the server doe
 
 ## How it works: 4 connection channels
 
-The **PhoneStream** tray app manages four channels and picks the best available one automatically:
+The **PhoneStream** tray app manages four channels and picks the best available one automatically. When multiple phones are connected, channels are shown for the **selected device** only and update live when you switch devices.
 
 | Channel | When used | Notes |
 |---------|-----------|-------|
 | **USB — adb** | USB cable connected | Highest speed and reliability; preferred for transfers and streaming |
-| **Wi-Fi — SSH :8022** | USB unavailable, Termux sshd reachable | Used for file streaming via rclone; multithreaded range requests |
-| **Wireless Debugging — mDNS** | Android 11+, WD enabled | Auto-discovery via `adb mdns services`; no manual IP needed |
+| **Wi-Fi — SSH :8022** | USB unavailable, Termux sshd reachable | Used for file streaming via rclone; multithreaded range requests. Requires Termux sshd on the phone. |
+| **Wireless Debugging — mDNS** | Android 11+, WD enabled | Auto-discovery via `adb mdns services`; no manual IP needed. Admin commands only (scrcpy, pm, logcat). |
 | **adb :5555 (legacy)** | Fallback if `service.adb.tcp.port=5555` is set | Not reboot-proof; not available on Samsung by default |
 
 The app keeps a USB keepalive running in the background (prevents macOS from suspending the USB port at 85% charge) and caches the phone's Wi-Fi IP for instant fallback.
+
+**Important:** SSH-based operations (upload, download, streaming, Wi-Fi mount) are only possible if the selected phone has Termux sshd running. On a second phone without Termux, only USB-adb operations are available.
+
+---
+
+## Multi-device support
+
+When more than one Android phone is connected, a **Device:** selector appears at the top of the tray menu. Each entry shows the model name and connection kind (e.g. `SM-G975F — USB+Wi-Fi`). Clicking a row switches the active device **without closing the menu**; the active device is marked with ✓ and shown in bold white.
+
+What the device selector affects:
+
+- Channel indicators (🟢/⚪️) in the Connection Center reflect only the selected device's channels and update live on switch.
+- Mount section headers show the selected device's model.
+- USB mount, scrcpy, and cache-clear operations target the selected device.
+- Upload and download operations auto-pick the best channel (USB → Wi-Fi SSH) for the selected device.
+
+The selection persists across tray restarts via `~/.phone_active_model` (stores the model string, not the serial — Wi-Fi adb serials are ephemeral and change on each Wireless Debugging session).
 
 ---
 
@@ -74,12 +93,14 @@ The app keeps a USB keepalive running in the background (prevents macOS from sus
 
 - **File browser** — ADBFileExplorer shows directory listings instantly over any channel; no Finder volume needed to browse
 - **No-copy streaming** — open videos directly in IINA via HTTP range requests; the file never lands on your Mac
-- **Bulk transfers** — `adb pull` at ~175 MB/s over USB; rclone/SFTP for structured copy jobs
-- **FUSE mount (optional, USB only)** — mount as a Finder volume for applications that need a file path (`~/Phone-USB`); reliable only over USB
+- **Bulk upload** — rclone/SFTP with 8 parallel streams; ~24 MB/s over Wi-Fi, faster over USB; file picker in the tray
+- **Direct-to-phone download** — paste a URL; rclone fetches it onto the phone bypassing the Mac disk
+- **FUSE mount (optional)** — USB mount (`~/Phone-USB`) for apps that need a file path; Wi-Fi mount available as a last resort (marked ⚠)
 - **Menubar app** — connect, stream, browse, mount/unmount without opening Terminal
 - **Auto-transport** — USB→Wi-Fi failover is automatic; the active channel is shown in the Connection Center
-- **Screen mirror** — `scrcpy` launched from the tray (uses your locally-installed scrcpy)
+- **Screen mirror** — `scrcpy` launched from the tray (uses your locally-installed scrcpy), targets the selected device
 - **Setup wizard** — `./setup.sh` installs all dependencies and configures SSH keys; safe to re-run
+- **Anti-hang watchdog** — proactive stat-timeout + reachability check; force-unmounts a stalling mount before the OS enters D-state
 
 ---
 
@@ -92,6 +113,7 @@ Tested: Samsung Galaxy S10+ (Android 12), Intel Mac (T2 chip), USB 3 cable. Resu
 | `adb pull` over USB | ~175 MB/s | Bulk file transfer, most reliable |
 | rclone/SFTP via `adb forward` (USB) | ~110–140 MB/s | Structured copy; multithread |
 | HTTP range stream via `adb exec-out` (USB) | ~27 MB/s | No-copy playback in IINA; USB path |
+| rclone upload --transfers 8 (Wi-Fi SSH) | ~24 MB/s | Multi-stream upload from tray button |
 | Wi-Fi SSH multistream (5 GHz) | ~25 MB/s | Ceiling is Wi-Fi radio + phone power-saving latency, not the channel |
 | Wi-Fi HTTP range stream | ~7 MB/s per chunk | Fallback when USB unavailable |
 | MTP over USB (macOS built-in) | 5–15 MB/s | Baseline for comparison |
@@ -100,11 +122,41 @@ Tested: Samsung Galaxy S10+ (Android 12), Intel Mac (T2 chip), USB 3 cable. Resu
 
 ---
 
+## Transfers
+
+### Upload to phone — fast, multi-stream
+
+**Tray menu → ⬆︎ Upload to phone (fast, multi-stream)**
+
+Opens a file/folder picker. Selected items are sent to `/sdcard/Download` via `rclone copy` over SFTP with `--transfers 8 --multi-thread-streams 4`. Channel is auto-selected by `phone-transport.sh`: USB first (via `adb forward`), then Wi-Fi SSH. Typical throughput ~24 MB/s over Wi-Fi, faster over USB.
+
+### Download from internet to phone
+
+**Tray menu → ⬇︎ Download from internet to phone**
+
+Paste an `http://` or `https://` URL. `rclone copyurl` delivers the file directly to `/sdcard/Download` on the phone via SFTP — the Mac disk is never involved. Only `http`/`https` are accepted (file:// and other schemes are rejected). Channel is auto-selected the same way as upload.
+
+### Which transfer method for what
+
+The tray item **ⓘ Transfers — which for what** (and **ⓘ Which channel for what** for channels) shows an in-app summary. Quick reference:
+
+| Goal | Method |
+|------|--------|
+| Bulk / many / large files to phone | ⬆︎ Upload button (multi-stream rclone) |
+| Grab a download link onto phone | ⬇︎ Download from internet |
+| Browse and watch video | ADB Explorer / FileDroid → streams in IINA |
+| Another Mac app needs a file path | Mount USB folder (Finder) |
+| Bulk pull from phone to Mac | `adb pull` (~175 MB/s USB) |
+
+---
+
 ## Browsing vs. mounting
 
 **For browsing and streaming:** use ADBFileExplorer + IINA. Discrete adb calls with timeouts are safe; a persistent FUSE mount over Wi-Fi is not — if the connection flaps, the mount wedges the kernel into uninterruptible I/O (D-state), freezing Finder and Activity Monitor until the adb connection is physically severed.
 
-**For mounting (giving a file path to an application):** USB-only FUSE mount (`~/Phone-USB`) is stable. Wi-Fi mount is a last resort — use it only when USB is unavailable and expect the watchdog to force-unmount if the connection drops.
+**For mounting (giving a file path to an application):** USB-only FUSE mount (`~/Phone-USB`) is stable. Wi-Fi mount is a last resort — use it only when USB is unavailable and expect the watchdog to force-unmount if the connection drops. The Wi-Fi mount entry is marked ⚠ in the menu to make this clear.
+
+**Mount all:** mounts only the USB volume. The Wi-Fi mount is excluded deliberately — it requires an explicit "Mount Wi-Fi (last resort)" step with an additional confirmation dialog.
 
 ---
 
@@ -180,7 +232,28 @@ ADBFileExplorer (Python/Qt)
 
 Each directory listing is a single `adb ls` call. No persistent connection; timeouts prevent D-state freezes.
 
-### FUSE mount (optional, USB only — for "give a path to an app")
+### Transfers (upload / internet download)
+
+```
+phone-upload.sh / phone-download.sh
+    └── phone-transport.sh  (auto-selects channel)
+          ├── USB → adb forward tcp:8022 → rclone copy/copyurl over SFTP (localhost)
+          └── Wi-Fi SSH → rclone copy/copyurl over SFTP (phone IP)
+```
+
+### Device selection (multi-device)
+
+```
+phone-devices.sh  →  parses `adb devices -l` (model: field, no getprop round-trip)
+                       →  compares against active_model() from ~/.phone_active_model
+                       →  emits SERIAL<TAB>MODEL<TAB>KIND<TAB>ACTIVE
+
+PhoneStream.swift  →  runs phone-devices.sh every 4 s in background
+                    →  Device: rows in tray (click = switch, menu stays open)
+                    →  channel indicators and mount headers update live on switch
+```
+
+### FUSE mount (optional, USB recommended)
 
 ```
 ~/Phone-USB  (Finder volume)
@@ -189,7 +262,16 @@ Each directory listing is a single `adb ls` call. No persistent connection; time
             └── adb over USB
 ```
 
-Stable over USB. Wi-Fi FUSE mount is not recommended — connection flap wedges the kernel.
+Stable over USB. Wi-Fi FUSE mount exists as a last resort — connection flap wedges the kernel; the watchdog force-unmounts before D-state.
+
+### Watchdog (anti-hang)
+
+```
+phone-watchdog.sh  (runs as long as the tray is alive)
+    └── every 3 s per mounted volume:
+          ├── stat with 3 s timeout → hang detected → force-unmount immediately
+          └── reachability check (USB device present / Wi-Fi ping) → 2 misses → force-unmount
+```
 
 ---
 
@@ -231,9 +313,12 @@ rclone write-back cache flushes after ~5 seconds. Do not unplug the cable or sle
 | File browser | yes (ADBFileExplorer) | yes (Finder) | yes | yes | no |
 | No-copy streaming to IINA | yes | no | no | no | no |
 | Automatic USB↔Wi-Fi failover | yes | no | no | no | no |
-| FUSE mount | yes (USB only) | yes | no | no | yes (manual) |
+| Multi-device support | yes | no | no | no | no |
+| FUSE mount | yes (USB; Wi-Fi as last resort) | yes | no | no | yes (manual) |
 | Write support | yes | yes | no | no | partial |
 | Menubar app | yes | yes | yes | yes | no |
+| Fast upload (multi-stream) | yes (~24 MB/s Wi-Fi) | no | no | no | no |
+| Direct internet→phone download | yes | no | no | no | no |
 | Free & open-source | yes* | no (paid) | yes | yes (unmaintained) | yes (CLI only) |
 | Transport | ADB + SSH | MTP | MTP | MTP | ADB / SSH |
 
