@@ -23,6 +23,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var wifiSsh     = false
         var wdMdns      = false
         var wd5555      = false
+        var wifiSshRaw  = false   // сырая доступность SSH (без привязки к устройству)
         // Список подключённых adb-устройств для подменю выбора.
         // Влияет только на adb-операции (USB-mount, scrcpy, cache).
         // SSH/Wi-Fi-операции (mount-wifi, stream, upload, download) идут на
@@ -75,7 +76,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             s.usbMounted  = self.usbMounted()
             s.wifiMounted = self.wifiMounted()
             s.usbAdb      = self.usbAdbOn()
-            s.wifiSsh     = self.wifiSshOn()
+            s.wifiSshRaw  = self.wifiSshOn()
+            s.wifiSsh     = s.wifiSshRaw
             s.wdMdns      = self.wdMdnsOn()
             s.wd5555      = self.wd5555On()
             // model: prefer USB device, fall back to any connected device
@@ -117,7 +119,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     s.usbAdb  = devList.contains { $0.model == m && $0.kind == "USB" }
                     s.wd5555  = devList.contains { $0.model == m && $0.serial.contains(":5555") }
                     s.wdMdns  = devList.contains { $0.model == m && $0.kind == "Wi-Fi" && !$0.serial.contains(":5555") }
-                    s.wifiSsh = s.wifiSsh && devList.contains { $0.model == m && $0.kind == "Wi-Fi" }
+                    s.wifiSsh = s.wifiSshRaw && devList.contains { $0.model == m && $0.kind == "Wi-Fi" }
                     s.model   = m
                 }
             }
@@ -590,7 +592,7 @@ SPEED CHEAT-SHEET
         state.usbAdb  = devs.contains { $0.model == model && $0.kind == "USB" }
         state.wd5555  = devs.contains { $0.model == model && $0.serial.contains(":5555") }
         state.wdMdns  = devs.contains { $0.model == model && $0.kind == "Wi-Fi" && !$0.serial.contains(":5555") }
-        state.wifiSsh = state.wifiSsh && devs.contains { $0.model == model && $0.kind == "Wi-Fi" }
+        state.wifiSsh = state.wifiSshRaw && devs.contains { $0.model == model && $0.kind == "Wi-Fi" }
         // галочки устройств + точки каналов обновляем ВЖИВУЮ (меню открыто)
         for row in deviceRows { styleDeviceButton(row.button, row.display, row.model == model) }
         refreshChannelItems()
