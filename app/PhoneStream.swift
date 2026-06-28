@@ -9,6 +9,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var busyCount = 0
     var busy: Bool { busyCount > 0 }
     var failed = Set<String>()   // channels whose last connect attempt failed (shown red)
+    // строки выбора устройства (кастомные view-кнопки: клик НЕ закрывает меню, галочка live)
+    var deviceRows: [(model: String, display: String, button: NSButton)] = []
 
     // FIX #1: cached phone state — populated by background timer, read by menuNeedsUpdate
     struct PhoneState {
@@ -259,21 +261,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // дропдаун-список устройств ИНЛАЙН (галочка = активный), дедуп по модели.
         // Всё ниже (каналы и т.д.) привязано к выбранному устройству.
         if !state.devices.isEmpty {
-            // список устройств ИНЛАЙН (раскрыт вниз прямо в меню, не сбоку), галочка = активный.
-            let hdr = NSMenuItem(title: "Device:", action: nil, keyEquivalent: ""); hdr.isEnabled = false
+            let hdr = NSMenuItem(title: "Device (click to switch — menu stays open):", action: nil, keyEquivalent: ""); hdr.isEnabled = false
             menu.addItem(hdr)
-            var seenModels = Set<String>()
+            deviceRows = []
+            var seenModels = Set<String>(); var idx = 0
             for dev in state.devices {
                 if seenModels.contains(dev.model) { continue }
                 seenModels.insert(dev.model)
                 let kinds = Set(state.devices.filter { $0.model == dev.model }.map { $0.kind })
                     .sorted().joined(separator: "+")
-                let isActive = dev.model == state.activeModel
-                let it = NSMenuItem(title: "   \(dev.model) — \(kinds)", action: #selector(selectDevice(_:)), keyEquivalent: "")
-                it.target = self
-                it.representedObject = dev.model
-                it.state = isActive ? .on : .off
-                menu.addItem(it)
+                let display = "\(dev.model) — \(kinds)"
+                let active = dev.model == state.activeModel
+                let v = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 22))
+                let b = NSButton(frame: NSRect(x: 14, y: 0, width: 284, height: 20))
+                b.isBordered = false
+                b.alignment = .left
+                b.font = NSFont.menuFont(ofSize: 0)
+                b.title = (active ? "✓ " : "    ") + display
+                b.tag = idx
+                b.target = self
+                b.action = #selector(deviceRowClicked(_:))
+                v.addSubview(b)
+                let mi = NSMenuItem(); mi.view = v
+                menu.addItem(mi)
+                deviceRows.append((model: dev.model, display: display, button: b))
+                idx += 1
             }
         }
 
@@ -565,9 +577,11 @@ SPEED CHEAT-SHEET
     // Записывает серийник в ~/.phone_active_serial, затем обновляет состояние.
     // SSH/Wi-Fi-операции (mount-wifi, stream, upload, download) НЕ затрагиваются —
     // они идут на SSH-сервер по закэшированному IP независимо от этого выбора.
-    @objc func selectDevice(_ sender: NSMenuItem) {
-        guard let model = sender.representedObject as? String else { return }
-        // МГНОВЕННО обновляем кэш (без ожидания 4с-рефреша), чтобы каналы переключились сразу
+    @objc func deviceRowClicked(_ sender: NSButton) {
+        let i = sender.tag
+        guard i >= 0 && i < deviceRows.count else { return }
+        let model = deviceRows[i].model
+        // мгновенно обновляем кэш-каналы
         let devs = state.devices
         state.activeModel = model
         state.model = model
@@ -575,7 +589,9 @@ SPEED CHEAT-SHEET
         state.wd5555  = devs.contains { $0.model == model && $0.serial.contains(":5555") }
         state.wdMdns  = devs.contains { $0.model == model && $0.kind == "Wi-Fi" && !$0.serial.contains(":5555") }
         state.wifiSsh = state.wifiSsh && devs.contains { $0.model == model && $0.kind == "Wi-Fi" }
-        // сохраняем выбор (модель, не серийник) + фоновый рефреш для точности
+        // галочки обновляем ВЖИВУЮ (меню остаётся открытым, т.к. клик по view)
+        for row in deviceRows { row.button.title = (row.model == model ? "✓ " : "    ") + row.display }
+        // сохраняем выбор (модель) + фоновый рефреш для точности (каналы перерисуются при переоткрытии)
         runCmd("printf '%s' \"$1\" > ~/.phone_active_model", [model]) { [weak self] _, _ in
             self?.scheduleBackgroundRefresh()
         }
