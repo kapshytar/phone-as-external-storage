@@ -59,6 +59,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationWillTerminate(_ note: Notification) {
         refreshTimer?.invalidate()
         stopKeepalive()
+        stopWatchdog()
     }
 
     // FIX #1: background state refresh — all sh() calls happen off the main thread
@@ -105,6 +106,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 s.devices = devList
                 s.activeModel = devList.first(where: { $0.active })?.model ?? devList.first?.model ?? s.model
+                // Если выбран конкретный девайс — светим ТОЛЬКО его каналы (по модели активного).
+                // Если не выбран — оставляем глобальные значения (как раньше).
+                if let act = devList.first(where: { $0.active }) {
+                    let m = act.model
+                    s.usbAdb  = devList.contains { $0.model == m && $0.kind == "USB" }
+                    s.wd5555  = devList.contains { $0.model == m && $0.serial.contains(":5555") }
+                    s.wdMdns  = devList.contains { $0.model == m && $0.kind == "Wi-Fi" && !$0.serial.contains(":5555") }
+                    s.wifiSsh = s.wifiSsh && devList.contains { $0.model == m && $0.kind == "Wi-Fi" }
+                    s.model   = m
+                }
             }
 
             // FIX #1: autoConnectWD moved here — side-effects belong in background, not in menu drawing
@@ -135,6 +146,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let p = Process(); p.launchPath = "/bin/bash"
         p.arguments = ["-c", "exec bash \"\(script)\""]   // single-instance lock inside the script
         try? p.run()
+    }
+    func stopWatchdog() {
+        let p = Process(); p.launchPath = "/bin/bash"
+        p.arguments = ["-c", "pkill -f phone-watchdog.sh 2>/dev/null; rmdir /tmp/phone-watchdog.lock 2>/dev/null"]
+        try? p.run(); p.waitUntilExit()
     }
 
     // ---- state helpers (called from background thread only) ----
@@ -240,19 +256,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Влияет на adb-операции (USB-mount, scrcpy, cache).
         // SSH/Wi-Fi-операции (mount-wifi, stream, upload, download) идут на
         // SSH-сервер по закэшированному IP — это подменю их НЕ затрагивает.
+        // дропдаун-список устройств ИНЛАЙН (галочка = активный), дедуп по модели.
+        // Всё ниже (каналы и т.д.) привязано к выбранному устройству.
         if state.devices.count > 1 {
-            let devMenu = NSMenu(title: "Device")
+            let hdr = NSMenuItem(title: "Device (✓ = active):", action: nil, keyEquivalent: "")
+            hdr.isEnabled = false
+            menu.addItem(hdr)
+            var seenModels = Set<String>()
             for dev in state.devices {
-                let title = "\(dev.model) — \(dev.kind)"
-                let it = NSMenuItem(title: title, action: #selector(selectDevice(_:)), keyEquivalent: "")
+                if seenModels.contains(dev.model) { continue }
+                seenModels.insert(dev.model)
+                let kinds = Set(state.devices.filter { $0.model == dev.model }.map { $0.kind })
+                    .sorted().joined(separator: "+")
+                let isActive = state.devices.contains { $0.model == dev.model && $0.active }
+                let it = NSMenuItem(title: "  \(dev.model) — \(kinds)", action: #selector(selectDevice(_:)), keyEquivalent: "")
                 it.target = self
                 it.representedObject = dev.serial
-                if dev.active { it.state = .on }
-                devMenu.addItem(it)
+                it.state = isActive ? .on : .off
+                menu.addItem(it)
             }
-            let devItem = NSMenuItem(title: "Device", action: nil, keyEquivalent: "")
-            devItem.submenu = devMenu
-            menu.addItem(devItem)
         }
 
         menu.addItem(.separator())
@@ -734,7 +756,7 @@ ssh -i "$KEY" -p 8022 -o StrictHostKeyChecking=no -o ConnectTimeout=6 u0_a520@"$
 """)
     }
 
-    @objc func quit() { stopKeepalive(); NSApp.terminate(nil) }
+    @objc func quit() { stopKeepalive(); stopWatchdog(); NSApp.terminate(nil) }
     func alert(_ t: String, _ m: String) {
         let a = NSAlert(); a.messageText = t
         a.informativeText = m.isEmpty ? "Check the phone and that sshd is running in Termux." : m
