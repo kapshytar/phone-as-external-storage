@@ -64,6 +64,26 @@ active_serial() {
   done < <("$ADB" devices 2>/dev/null | awk '$2=="device"{print $1}')
 }
 
+# active_ip — IP именно АКТИВНОГО устройства (wifi-adb serial → IP напрямую;
+# USB → спросить wlan0; иначе phone_ip-кэш).
+active_ip() {
+  local s ip
+  s=$(active_serial)
+  # wifi-adb: serial вида IP:PORT
+  case "$s" in
+    *:*)
+      echo "${s%%:*}"; return ;;
+  esac
+  # USB: спросить wlan0 через adb (</dev/null чтобы не есть stdin)
+  if [ -n "$s" ]; then
+    ip=$(_to 8 "$ADB" -s "$s" shell "ip -f inet addr show wlan0 2>/dev/null" </dev/null 2>/dev/null \
+         | awk '/inet /{print $2}' | cut -d/ -f1 | tr -d '\r' | head -1)
+    if [ -n "$ip" ]; then echo "$ip"; return; fi
+  fi
+  # fallback: кэш
+  phone_ip
+}
+
 # adb_dev — серийник активной модели → иначе первый USB
 adb_dev() {
   local a; a=$(active_serial)

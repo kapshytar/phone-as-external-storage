@@ -19,15 +19,30 @@ T="${1:-}"
 # ---- определить канал: HOST/PORT/точка ----
 if [ "$T" = "usb" ]; then
   MNT="$HOME/Phone-USB"; LABEL="USB"; HOST="127.0.0.1"; RPORT="$PHONE_SSH_PORT"
-  DEV=$(pick_usb)
+  # Предпочесть USB-устройство активной модели; иначе — первый USB
+  _am=$(active_model)
+  if [ -n "$_am" ]; then
+    DEV=$(_to 8 "$ADB" devices -l 2>/dev/null | awk -v m="$_am" '
+      / device / && /usb:/ {
+        serial=$1
+        for(i=2;i<=NF;i++) {
+          if ($i ~ /^model:/) {
+            mod=substr($i,7); gsub(/_/,"-",mod)
+            if (mod==m) { print serial; exit }
+          }
+        }
+      }')
+  fi
+  [ -n "${DEV:-}" ] || DEV=$(pick_usb)
 else
   MNT="$HOME/Phone-WiFi"; LABEL="Wi-Fi"; RPORT="$PHONE_SSH_PORT"
-  # IP из кэша (пишется keepalive/transport, пока телефон на USB); fallback — спросить adb
-  HOST=$(phone_ip)
+  # IP активного устройства (wifi-serial, wlan0 через USB, или кэш)
+  HOST=$(active_ip)
   if [ -z "$HOST" ]; then
+    # финальный фолбэк: спросить wlan0 первого USB
     u=$(pick_usb)
     if [ -n "$u" ]; then
-      ip_raw=$(_to 8 "$ADB" -s "$u" shell "ip -f inet addr show wlan0 2>/dev/null" 2>/dev/null \
+      ip_raw=$(_to 8 "$ADB" -s "$u" shell "ip -f inet addr show wlan0 2>/dev/null" </dev/null 2>/dev/null \
                | awk '/inet /{print $2}' | cut -d/ -f1 | tr -d '\r' | head -1)
       [ -n "$ip_raw" ] && write_ip_cache "$ip_raw" && HOST="$ip_raw"
     fi
