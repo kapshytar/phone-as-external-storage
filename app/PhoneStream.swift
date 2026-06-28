@@ -258,7 +258,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // SSH-сервер по закэшированному IP — это подменю их НЕ затрагивает.
         // дропдаун-список устройств ИНЛАЙН (галочка = активный), дедуп по модели.
         // Всё ниже (каналы и т.д.) привязано к выбранному устройству.
-        if state.devices.count > 1 {
+        if !state.devices.isEmpty {
             let devMenu = NSMenu(title: "Device")
             var seenModels = Set<String>()
             for dev in state.devices {
