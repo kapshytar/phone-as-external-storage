@@ -26,6 +26,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var wdMdns      = false
         var wd5555      = false
         var wifiSshRaw  = false   // сырая доступность SSH (без привязки к устройству)
+        var sshOK       = false   // у активного устройства есть живой sshd (mount/upload/download/stream возможны)
         // Список подключённых adb-устройств для подменю выбора.
         // Влияет только на adb-операции (USB-mount, scrcpy, cache).
         // SSH/Wi-Fi-операции (mount-wifi, stream, upload, download) идут на
@@ -81,6 +82,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             s.usbAdb      = self.usbAdbOn()
             s.wifiSshRaw  = self.wifiSshOn()
             s.wifiSsh     = s.wifiSshRaw
+            s.sshOK       = s.wifiSshRaw   // есть ли sshd у активного (для гейтинга mount/upload/download)
             s.wdMdns      = self.wdMdnsOn()
             s.wd5555      = self.wd5555On()
             // model: prefer USB device, fall back to any connected device
@@ -324,11 +326,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let bADB = item("Open ADB Explorer", #selector(openAdbExplorer), "")
         bADB.toolTip = "Same as FileDroid — adb-based browser with EXIF photo previews and click-to-stream. Best for: browsing and previews."
         menu.addItem(bADB)
-        let dItem = item("⬇︎ Download from internet to phone", #selector(downloadToPhone), "")
-        dItem.toolTip = "rclone copyurl over SFTP (single stream). Pulls a web URL straight onto the phone (/sdcard/Download), bypassing the Mac disk. Best for: grabbing a download link directly to the phone. Needs Wi-Fi SSH."
+        // SSH-зависимые передачи: доступны только если у выбранного устройства есть sshd
+        let dItem = item("⬇︎ Download from internet to phone" + (state.sshOK ? "" : " — no sshd"), #selector(downloadToPhone), "")
+        dItem.isEnabled = state.sshOK
+        dItem.toolTip = state.sshOK ? "rclone copyurl over SFTP — pulls a web URL straight onto the phone (/sdcard/Download), bypassing the Mac disk."
+                                     : "Unavailable: selected device has no Termux sshd. Install Termux + sshd on it, or pick the server phone."
         menu.addItem(dItem)
-        let uItem = item("⬆︎ Upload to phone (fast, multi-stream)", #selector(uploadToPhone), "")
-        uItem.toolTip = "rclone copy over SFTP, --transfers 8 + multi-thread (MAX speed). Auto channel USB→Wi-Fi. Best for: bulk uploads, many/large files (~24 MB/s Wi-Fi, faster on USB). → /sdcard/Download."
+        let uItem = item("⬆︎ Upload to phone (fast, multi-stream)" + (state.sshOK ? "" : " — no sshd"), #selector(uploadToPhone), "")
+        uItem.isEnabled = state.sshOK
+        uItem.toolTip = state.sshOK ? "rclone copy over SFTP, --transfers 8 + multi-thread (MAX speed). Auto channel USB→Wi-Fi. → /sdcard/Download."
+                                     : "Unavailable: selected device has no Termux sshd. Install Termux + sshd on it, or pick the server phone."
         menu.addItem(uItem)
         menu.addItem(item("  ⓘ Transfers — which for what", #selector(helpTransfers), ""))
         menu.addItem(.separator())
@@ -343,10 +350,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if usbM {
             menu.addItem(item("  Open USB folder", #selector(openUSB), ""))
             menu.addItem(item("  Unmount USB", #selector(unmountUSB), ""))
-        } else if usbA {
+        } else if usbA && state.sshOK {
             menu.addItem(item("  Mount USB", #selector(mountUSB), ""))
         } else {
-            let na = NSMenuItem(title: "  (unavailable)", action: nil, keyEquivalent: "")
+            let na = NSMenuItem(title: usbA ? "  (needs Termux sshd on this phone)" : "  (unavailable)", action: nil, keyEquivalent: "")
             na.isEnabled = false
             menu.addItem(na)
         }
@@ -362,10 +369,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if wifiM {
             menu.addItem(item("  Open Wi-Fi folder", #selector(openWiFi), ""))
             menu.addItem(item("  Unmount Wi-Fi", #selector(unmountWiFi), ""))
-        } else if wifiA {
+        } else if wifiA && state.sshOK {
             menu.addItem(item("  ⚠︎ Mount Wi-Fi (slow, last resort)", #selector(mountWiFi), ""))
         } else {
-            let na = NSMenuItem(title: "  (unavailable)", action: nil, keyEquivalent: "")
+            let na = NSMenuItem(title: state.sshOK ? "  (unavailable)" : "  (needs Termux sshd on this phone)", action: nil, keyEquivalent: "")
             na.isEnabled = false
             menu.addItem(na)
         }
@@ -614,8 +621,11 @@ SPEED CHEAT-SHEET
             DispatchQueue.main.async {
                 guard self.state.activeModel == model else { return }   // не перетереть, если уже переключили дальше
                 self.state.wifiSshRaw = ok
+                self.state.sshOK = ok
                 self.state.wifiSsh = ok && self.state.devices.contains { $0.model == model && $0.kind == "Wi-Fi" }
                 self.refreshChannelItems()
+                // SSH-зависимые пункты могли поменять доступность → перерисовать меню
+                if let m = self.statusItem.menu { self.menuNeedsUpdate(m) }
             }
         }
         scheduleBackgroundRefresh()

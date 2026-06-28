@@ -96,6 +96,24 @@ active_ip() {
   phone_ip
 }
 
+# active_ssh_ok — есть ли у АКТИВНОГО устройства живой sshd (любым путём): yes/no.
+# Wi-Fi: nc active_ip:8022. USB: adb forward 8022 + nc 127.0.0.1:8022.
+# От этого зависит доступность mount/upload/download/stream.
+active_ssh_ok() {
+  local ip us
+  ip=$(active_ip)
+  if [ -n "$ip" ] && _to 3 nc -z -G2 "$ip" 8022 >/dev/null 2>&1; then echo yes; return; fi
+  # USB-вход активной модели → форвард + проверка localhost
+  local m; m=$(active_model)
+  us=$("$ADB" devices -l 2>/dev/null | awk -v m="$m" '
+    / device .*usb:/ { s=$1; mod=""; for(i=2;i<=NF;i++){if($i ~ /^model:/){mod=substr($i,7);gsub(/_/,"-",mod)}} if(mod==m){print s; exit} }')
+  if [ -n "$us" ]; then
+    _to 6 "$ADB" -s "$us" forward tcp:8022 tcp:8022 >/dev/null 2>&1
+    _to 3 nc -z -G2 127.0.0.1 8022 >/dev/null 2>&1 && { echo yes; return; }
+  fi
+  echo no
+}
+
 # adb_dev — серийник активной модели → иначе первый USB
 adb_dev() {
   local a; a=$(active_serial)
